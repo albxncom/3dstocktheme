@@ -43,7 +43,7 @@ float progress_install(int step, float within)
         within = 1;
     switch (step) {
     case STEP_MEASURE: return 0.15f * within;
-    case STEP_STAGE: case STEP_TITLE1: case STEP_TMD: return 0.15f;
+    case STEP_STAGE: case STEP_TICKET: case STEP_TITLE1: case STEP_TMD: return 0.15f;
     case STEP_CONTENT0: return 0.15f + 0.10f * within;
     case STEP_COMMIT1: case STEP_RECORD: case STEP_TITLE2: case STEP_CONTEXT: return 0.25f;
     case STEP_CONTENT: return 0.25f + 0.72f * within;

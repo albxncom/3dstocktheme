@@ -366,17 +366,25 @@ int main(int argc, char **argv)
     press(KEY_A, 900);
     expect(SCR_LIST, "empty folder");
     shot("dX-04-folder-empty");
+    /* no theme pack on the console (the fake console without the title, 1.0.0-beta.2): the Themes part opens as with
+     * an empty pack, and the check screen's footer says that the install creates the pack */
+    make_no_pack();
+    read_pack();
+    take_pack();
     go_designs(0);
     frames_for(600);
-    {
-        int was = pv.state;
-        pv.state = PACK_NOT_INSTALLED;  /* forced: no theme pack on the console */
-        press(KEY_A, 300);
-        press(KEY_A, 900);
-        expect(SCR_PROBLEM, "no pack");
-        shot("dX-05-no-pack");
-        pv.state = was;
-    }
+    press(KEY_A, 300);
+    press(KEY_A, 900);
+    expect(SCR_LIST, "no pack: SD-Karte");
+    select_row(row_named("Papierflieger.zip"));
+    press(KEY_A, 900);
+    expect(SCR_CONFIRM, "no pack: check Papierflieger");
+    if (!can_install() || !plan.first)
+        return 1;
+    shot("dX-05-first-install");
+    make_pack(argv[4], argv[3], 0);     /* the pack as the walk had it */
+    read_pack();
+    take_pack();
     go_designs(1);
     frames_for(600);
     fl_cam_fail = 1;
@@ -456,7 +464,8 @@ int main(int argc, char **argv)
         show_note(ART_INFO_WARN, done, NULL);
         shot("dX-14-file-not-deleted");
         press(KEY_B, 600);
-        judgement j = {OUT_UNKNOWN, 0, 1, 0, PENDING_YES};  /* review of FB-E2: AM's view unread, an import pending */
+        /* review of FB-E2: AM's view unread, an import pending */
+        judgement j = {OUT_UNKNOWN, 0, 1, 0, PENDING_YES, 0, 0};
         install_res.detail = TP_E_ZIP;
         install_res.wrote = 0;
         install_res.failed = STEP_NONE;

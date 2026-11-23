@@ -4,7 +4,8 @@
  * Where it comes from, and who wins when the sources disagree:
  * - The theme records of the installed TMD and their catalogue entries (name, icon), as pack_assess read them. They
  *   count only when the record file matches AM's content list (tp_tmd_check) and the catalogue has every record's
- *   entry; any other pack state shows the reason instead of a list. A full pack is read whole and is listed.
+ *   entry; any other pack state shows the reason instead of a list. A full pack is read whole and is listed; without
+ *   the pack title the list is empty (no TMD is read: there is none).
  * - AM decides what is installed: a record AM lists as not installed and owned (deleted in HOME or here) is not
  *   shown, although it keeps its record, its catalogue entry and its index. AM's content count is the TMD's
  *   (installed or not), so the list never relies on it, only on each content's flags.
@@ -35,7 +36,8 @@ typedef struct design_list {
     size_t count;
 } design_list;
 
-/* Whether the pack was read whole, so its designs can be listed (and deleted): PACK_OK or full. */
+/* Whether the pack was read whole, so its designs can be listed (and deleted): PACK_OK or full; or not installed,
+ * whose list is empty. */
 int designs_readable(const pack_view *pv);
 
 /* The installed designs of a readable pack in index order (the order they were added); none otherwise. Music from
@@ -49,7 +51,7 @@ void designs_files(design_list *d, const scan_list *folder);
  * which are never handed out twice, up to TP_INDEX_MAX. 0 for a pack that was not read whole. */
 unsigned designs_room(const pack_view *pv);
 
-/* The room worth a warning: designs_room while the pack still takes designs (PACK_OK) but fewer than
+/* The room worth a warning: designs_room while the pack still takes designs (pack_takes) but fewer than
  * DESIGNS_ROOM_LOW more; 0 otherwise: plenty is left and nothing is said, or the pack is full, which its state says
  * itself. */
 #define DESIGNS_ROOM_LOW 5

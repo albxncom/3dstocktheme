@@ -33,7 +33,8 @@ void console_log_flush(void);
 void console_log_close(void);
 void console_log_view(const char *when, const am_view *v);
 
-/* AM's view of the pack title through am:sys. Every call and its result go to the log. */
+/* AM's view of the pack title through am:sys; when AM does not know the title, also whether the console has a
+ * ticket for it (if that cannot be told, the view is not read). Every call and its result go to the log. */
 void console_read_am(am_view *v);
 
 /* Mounts the installed content 0 and points the reader at its catalogue; console_close_catalogue undoes it.
@@ -46,7 +47,8 @@ void console_close_catalogue(void);
  * own name, and unmounted again. Writes no log, so the worker can call it. */
 int console_content_music(uint16_t index, uint32_t *error);
 
-/* The importer over am:net, in the T3 sequence. */
+/* The importer over am:net, in the T3 sequence; for a first install on a console without a ticket for the title,
+ * the ticket before it (install.h). */
 void console_importer(importer *imp);
 
 /* HOME's SaveData.dat, read (never written) from the EUR HOME Menu's SD extdata 00000098, as Anemone3DS v3.0.1

@@ -14,7 +14,8 @@
 
 enum { PENDING_NO, PENDING_YES, PENDING_UNKNOWN };
 
-/* What AM reports for the pack title (AMAPP_GetDLCTitleInfos, AMAPP_ListDLCContentInfos, the pending list). */
+/* What AM reports for the pack title (AMAPP_GetDLCTitleInfos, AMAPP_ListDLCContentInfos, the pending list; the
+ * ticket list only when AM does not know the title). */
 typedef struct am_view {
     int ok;                     /* every status call answered; when 0 nothing else here counts */
     uint32_t error;             /* the first failing result code */
@@ -23,7 +24,9 @@ typedef struct am_view {
     size_t count;
     tp_am_content list[PACK_CONTENTS];
     uint8_t usable[PACK_CONTENTS];  /* per list entry: installed and owned, which is what HOME lists */
+    uint8_t installed[PACK_CONTENTS];   /* per list entry: installed, owned or not */
     int pending;                /* PENDING_*: an import of this title that was not committed */
+    int ticket;                 /* AM does not know the title: the console has a ticket for it (AM_GetTicketList) */
 } am_view;
 
 /* The installed content 0, read by the console layer (romfs of the content) or a test (files). */
@@ -48,7 +51,7 @@ typedef struct pack_theme {     /* a theme record of the installed TMD with its 
 enum pack_state {
     PACK_OK,
     PACK_AM_ERROR,              /* AM did not answer the status calls */
-    PACK_NOT_INSTALLED,         /* no pack title: this version only adds to an installed pack */
+    PACK_NOT_INSTALLED,         /* no pack title: the first install creates it (install_plan.first) */
     PACK_PENDING,               /* an import of this title is pending */
     PACK_PENDING_UNKNOWN,       /* whether one is pending is unknown */
     PACK_NO_STORE,              /* no record on the card */
@@ -75,14 +78,21 @@ typedef struct pack_view {
     const uint8_t *tmd;         /* the record that matches AM: points into the store_record given */
     size_t tmd_size;
     int from_staged;            /* that record is installed.tmd.new */
+    int ticket;                 /* PACK_NOT_INSTALLED: the console has a ticket for the title, which is kept */
 } pack_view;
 
 /* Works out the state of the pack: AM first, then the record (installed.tmd, else installed.tmd.new, whichever
  * tp_tmd_check finds equal to AM's list), then the catalogue for every theme record. mark is store_mark's value.
- * Only PACK_OK allows an install. */
+ * When AM does not know the title (and nothing of it is pending) the pack is PACK_NOT_INSTALLED: no theme, no TMD,
+ * the record files of an earlier pack do not count, top is the mark. Only PACK_OK and PACK_NOT_INSTALLED allow an
+ * install (pack_takes). */
 int pack_assess(pack_view *pv, const am_view *am, const store_record rec[2], uint16_t mark,
                 const catalogue_reader *cat);
 void pack_free(pack_view *pv);
+
+/* Whether an install can be planned on the pack: PACK_OK, or PACK_NOT_INSTALLED, where the first install creates it.
+ * The status line then counts the themes HOME lists (none without the pack). */
+int pack_takes(const pack_view *pv);
 
 /* The installed theme a zip already is: same name as the catalogue holds it (cut to 63 bytes) and same icon.
  * Returns the index or 0; *usable tells whether that one is installed (HOME lists it) or was deleted in HOME. */
@@ -107,13 +117,18 @@ typedef struct install_plan {
     tp_entry entries[TP_THEMES_MAX];    /* the new catalogue: every theme record of the TMD, then the new one */
     size_t count;
     uint16_t top;
-    tp_delta delta;             /* content 0's new ID, the new version, the one content to add */
+    tp_delta delta;             /* content 0's new ID, the new version, the one content to add; 0 for a first install */
+    int first;                  /* the pack title is not installed: this install creates it, a whole pack of the one
+                                   theme (content 0 with ID 0, the theme with ID = index, title version 0) */
+    int new_ticket;             /* first: the console has no ticket for the title, so the install brings one */
     const pack_view *pv;
     const tp_theme *theme;
 } install_plan;
 
-/* Plans adding one opened theme to a PACK_OK pack, with the core's rules (tp_next_index, tp_delta_plan). The
- * plan points into pv and theme; keep both until the install is over. */
+/* Plans adding one opened theme to a PACK_OK pack, with the core's rules (tp_next_index, tp_delta_plan); or, on a
+ * PACK_NOT_INSTALLED pack, the first install: the index the next after the card's mark (tp_next_index with no index
+ * in use), the catalogue that one theme up to it. The plan points into pv and theme; keep both until the install is
+ * over. */
 int plan_install(install_plan *plan, const pack_view *pv, const tp_theme *theme);
 
 /* The catalogue of a plan, with an icon callback that serves the installed icons and the new theme's. */

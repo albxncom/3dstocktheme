@@ -130,6 +130,7 @@ enum text_id {
     T_TRY_AGAIN,                /* FB-E: the box's text of a problem that has no explanation of its own */
     T_SOUNDS_CREDIT,            /* FIX-1: under the sounds' choices, the interface sounds' maker; each track's line
                                    is text_track_credit's */
+    T_CREATES_PACK,             /* the check screen's footer before the first install (install_plan.first) */
     T_COUNT
 };
 
@@ -150,7 +151,7 @@ void text_track_credit(int lang, const char *title, const char *author, const ch
 /* The short German or English sentence for a tp_result. */
 const char *text_result(int lang, int result);
 
-/* Title and body for a pack that cannot take a theme (pack_view.state != PACK_OK). */
+/* Title and body for a pack that cannot take a theme (!pack_takes); for one that can, the status line. */
 void text_pack(int lang, const pack_view *pv, char *title, size_t title_size, char *body, size_t body_size);
 
 /* The body for a plan that refuses for a reason other than a duplicate (PLAN_FULL_*, PLAN_CORE), or says the

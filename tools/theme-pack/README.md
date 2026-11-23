@@ -2,6 +2,8 @@
 
 Builds custom 3DS themes into the HOME Menu's own theme system: one theme DLC title (a CIA) whose contents are your theme zips, so each theme shows up under "Change Theme" with its name and icon, can be deleted there one by one, and is stored by layout slots and shuffle like an official theme. Stdlib only (tested with Python 3.14), plus makerom and ctrtool (see Setup).
 
+Optional since 3DStockTheme 1.0.0-beta.2: the application creates the pack on the console itself with the first theme (the TMD, the catalogue, a ticket when the console has none, and the record on the SD card), so a console needs nothing from this tool. It is still what builds a pack on a computer: many themes in one CIA, or a pack on a variation other than 09, which the application never writes. The application adds to a pack on 09 built here once its record is on the card ([Seeding the record from the Mac](../../docs/README.md#seeding-the-record-from-the-mac)). Its `verify` and `verify-delta` are also the independent checkers `make test` holds the core's packs and deltas against, and `adopt` brings the Mac's records level with what the application installed.
+
 Status: a pack on the spare variation 09 lists, applies and comes back from a layout slot (console test T1), and HOME's own Delete removes one of its themes (T2), both on a console on 2026-11-12. Adding a theme without a reinstall (`delta` and the test application [`import-test/`](import-test/), console test T3) passed on a console on 2026-11-12 and 13: AM kept the contents installed before, HOME listed the old themes and the new one, and an old and the new theme applied.
 
 ## Warning: the target title
@@ -75,13 +77,13 @@ HOME, its save, shuffle and every layout slot reference a DLC theme by (variatio
 - a zip that is removed from `themes/` keeps its manifest entry: its index is reserved, the pack lists it as removed but has no content for it, so HOME does not show it; put the zip back and it returns under its old index;
 - the identity of a theme is its zip file name: renaming a zip makes it a new theme.
 
-Removing a theme from the console needs no rebuild: HOME's own Delete removes one content. Adding a theme means a rebuild and reinstall of the whole pack (the installer wipes the title first; the fixed indices keep slots valid), or a delta imported with the test application, which is not proven on a console yet (next section).
+Removing a theme from the console needs no rebuild: HOME's own Delete removes one content. Adding a theme means a rebuild and reinstall of the whole pack (the installer wipes the title first; the fixed indices keep slots valid), or a delta imported with the test application, which passed console test T3 on 2026-11-12 and 13 (next section).
 
 ## Install (console)
 
-Copy `out/theme-pack.cia` to its own folder on the SD card (not `/cias/`, which FBI's "install all" would sweep) and install it with FBI. Then record it on the Mac: `theme_pack.py installed <that CIA>`; `delta` builds on that record. Before the first install, back up the theme extdata `000002ce`, the HOME extdata `00000098` and the layout extdata `0000165c`. Recovery: GodMode9 deletes `title/0004008c/000098<xx>` and `extdata/00000000/000002ce` on the card (HOME rebuilds the theme extdata), FBI removes the pack's ticket.
+Copy `out/theme-pack.cia` to its own folder on the SD card (not `/cias/`, which FBI's "install all" would sweep) and install it with FBI. Then record it on the Mac: `theme_pack.py installed <that CIA>`; `delta` builds on that record, and 3DStockTheme needs it on the card ([Seeding the record from the Mac](../../docs/README.md#seeding-the-record-from-the-mac)). Before the first install, back up the theme extdata `000002ce`, the HOME extdata `00000098` and the layout extdata `0000165c`. Recovery: GodMode9 deletes `title/0004008c/000098<xx>` and `extdata/00000000/000002ce` on the card (HOME rebuilds the theme extdata), FBI removes the pack's ticket.
 
-**Never remove the pack in System Settings, Data Management.** It lists all theme titles as one entry (seen on a console on 2026-11-12: one "Design" entry for the four official theme titles and the pack together), so deleting it would very likely remove the official themes too (inferred, not tested). Remove the pack only with FBI: title and ticket of the pack's own title ID, after checking that FBI shows `0004008C000098xx` with the pack's variation.
+**Never remove the pack in System Settings, Data Management.** It lists all theme titles as one entry (seen on a console on 2026-11-12: one "Design" entry for the four official theme titles and the pack together), so deleting it would very likely remove the official themes too (inferred, not tested). Remove the pack only with FBI: title and ticket of the pack's own title ID, after checking that FBI shows `0004008C000098xx` with the pack's variation. The same holds for the pack 3DStockTheme creates: its title is `0004008C00009809`.
 
 ## What the pack contains, and why
 

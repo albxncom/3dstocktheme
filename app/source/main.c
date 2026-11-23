@@ -225,12 +225,12 @@ static const char *folder_name(const char *dir)
     return strrchr(dir, '/') + 1;
 }
 
-/* The status line: how many themes the HOME Menu lists, behind the house (the symbol returned); or what is wrong
- * with the pack, without a symbol (-1). */
+/* The status line: how many themes the HOME Menu lists, behind the house (the symbol returned; none without the pack
+ * title, which the first install creates); or what is wrong with the pack, without a symbol (-1). */
 static int status_line(char *out, size_t size)
 {
     char unused[8];
-    if (pv.state != PACK_OK) {
+    if (!pack_takes(&pv)) {
         text_pack(lang, &pv, out, size, unused, sizeof unused);
         return -1;
     }
@@ -908,6 +908,9 @@ static void read_pack(void)
     for (size_t k = 0; k < next_pv.count; k++)
         console_log("   theme %3u  %s  %s", next_pv.themes[k].index,
                     next_pv.themes[k].usable ? "installed" : "deleted  ", next_pv.themes[k].name);
+    if (next_pv.state == PACK_NOT_INSTALLED)
+        console_log("pack: not installed, the first install creates it; %s", next_pv.ticket
+                    ? "the ticket on the console is kept" : "no ticket on the console, the install brings one");
 }
 
 /* The pack read_pack read becomes the pack: on this thread, between two frames. */
@@ -997,10 +1000,11 @@ static void go_designs(int which)
     screen = SCR_DESIGNS;
 }
 
-/* Both ways in need a pack that can take a theme; otherwise the reason. */
+/* Both ways in need a pack that can take a theme (or no pack yet: the first install creates it); otherwise the
+ * reason. */
 static int pack_ready(void)
 {
-    if (pv.state == PACK_OK)
+    if (pack_takes(&pv))
         return 1;
     text_pack(lang, &pv, title, sizeof title, body, sizeof body);
     problem_head = T_DESIGNS;
@@ -1474,14 +1478,17 @@ static void demo_install(const install_progress *progress, install_result *res)
 }
 #endif
 
-/* AM's view right before the first write: the record must still match it and nothing may be pending. It is also
- * the view the judgement compares with, so a theme deleted in HOME meanwhile does not count as lost. */
+/* AM's view right before the first write: the record must still match it and nothing may be pending; before a first
+ * install, AM must still not know the title and the ticket must be as it was. It is also the view the judgement
+ * compares with, so a theme deleted in HOME meanwhile does not count as lost. */
 static int still_same(install_result *res)
 {
     tp_difference d;
     console_read_am(&before);
     console_log_view("before the install", &before);
-    if (before.ok && before.exists && before.pending == PENDING_NO &&
+    if (plan.first && before.ok && !before.exists && before.pending == PENDING_NO && before.ticket == pv.ticket)
+        return 1;
+    if (!plan.first && before.ok && before.exists && before.pending == PENDING_NO &&
         tp_tmd_check(pv.tmd, pv.tmd_size, before.version, before.list, before.count, &d) == TP_OK)
         return 1;
     memset(res, 0, sizeof *res);
@@ -1530,7 +1537,7 @@ static void install_work(void *arg)
     console_read_am(&after);
     console_log_view("after", &after);
 #ifdef APP_DEMO
-    install_j = (judgement){OUT_DONE, 1, 0, 1, PENDING_NO};
+    install_j = (judgement){OUT_DONE, 1, 0, 1, PENDING_NO, plan.first, 0};
 #else
     install_judge(&before, &after, &plan, &install_res, &install_j);
 #endif
@@ -1558,7 +1565,7 @@ static void run_install(void)
     problem_ok = 1;
     console_log_strict(1);      /* from AM's view before the first write to the pack read after it */
     if (!still_same(&install_res)) {
-        judgement j = {OUT_NOTHING_WRITTEN, 1, 0, 0, PENDING_NO};
+        judgement j = {OUT_NOTHING_WRITTEN, 1, 0, 0, PENDING_NO, plan.first, 0};
         text_outcome(lang, &j, &install_res, theme.name, title, sizeof title, body, sizeof body);
         read_pack();
         finish(0);
@@ -1567,10 +1574,16 @@ static void run_install(void)
     }
     aptSetHomeAllowed(false);
     aptSetSleepAllowed(false);
-    console_log("== Install \"%s\" from %s/%s as theme %u%s: title version %u -> %u, content 0 ID %08" PRIX32
-                ", catalogue top %u", theme.name, chosen_dir, chosen, plan.index,
-                theme.body_mem ? " without music" : "", pv.version, plan.delta.version, plan.delta.content0_id,
-                plan.top);
+    if (plan.first)
+        console_log("== First install \"%s\" from %s/%s as theme %u%s: creates title %016llX (version 0, content 0 "
+                    "ID 00000000), %s, catalogue top %u", theme.name, chosen_dir, chosen, plan.index,
+                    theme.body_mem ? " without music" : "", TP_TITLE_ID,
+                    plan.new_ticket ? "its ticket first" : "the ticket on the console kept", plan.top);
+    else
+        console_log("== Install \"%s\" from %s/%s as theme %u%s: title version %u -> %u, content 0 ID %08" PRIX32
+                    ", catalogue top %u", theme.name, chosen_dir, chosen, plan.index,
+                    theme.body_mem ? " without music" : "", pv.version, plan.delta.version, plan.delta.content0_id,
+                    plan.top);
     install_from = confirm_from;        /* the folder view is freed by finish(); after it comes back as it was */
     install_selected = open_selected;
     install_scroll = lv.scroll;
@@ -3214,7 +3227,9 @@ static void confirm_top(void)
     }
     ui_pic none = {NULL, -1};
     ui_gallery((ui_pic){theme.icon, -1}, none, none, theme.name, theme.has_bgm);
-    if (plan.state == PLAN_OK || plan.state == PLAN_DUPLICATE)
+    if (plan.state == PLAN_OK && plan.first)    /* instead of "no themes": what else the install does */
+        ui_foot(FOOT_DOTS_Y, ART_HOME_FOOT, text(lang, T_CREATES_PACK), MUTED, 0, NULL);
+    else if (plan.state == PLAN_OK || plan.state == PLAN_DUPLICATE)
         ui_foot(FOOT_DOTS_Y, status_line(line, sizeof line), line, MUTED, 0, NULL);
     else
         ui_foot(FOOT_DOTS_Y, -1, text(lang, T_CANNOT_INSTALL), WARN, 0, NULL);
@@ -3800,7 +3815,7 @@ static void fit_probe(void)
     ui_fit fp_fit;
     for (int fp_l = 0; fp_l < 2; fp_l++) {
         for (size_t fp_o = 0; fp_o < sizeof OUTS / sizeof *OUTS; fp_o++) {
-            judgement fp_j = {OUTS[fp_o].out, OUTS[fp_o].out != OUT_UNKNOWN, 12, 0, PENDING_YES};
+            judgement fp_j = {OUTS[fp_o].out, OUTS[fp_o].out != OUT_UNKNOWN, 12, 0, PENDING_YES, 0, 0};
             install_result fp_res;
             memset(&fp_res, 0, sizeof fp_res);
             fp_res.detail = TP_E_NOMEM;

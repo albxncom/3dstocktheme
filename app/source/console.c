@@ -1,7 +1,11 @@
 // AM calls (libctru 2.7.0, include/3ds/services/am.h in devkitpro/devkitarm:20260610), as the test application
 // tools/theme-pack/import-test used them in console test T3 (passed 2026-11-12):
 //   status, am:sys:  AMAPP_GetDLCTitleInfos, AMAPP_GetDLCContentInfoCount, AMAPP_ListDLCContentInfos,
-//                    AM_GetNumPendingTitles, AM_GetPendingTitleList
+//                    AM_GetNumPendingTitles, AM_GetPendingTitleList; only when AM does not know the title also
+//                    AM_GetTicketCount and AM_GetTicketList (in pieces of TICKET_PIECE), as FBI lists tickets
+//   the ticket, am:net, a first install on a console without a ticket for the title (FBI's installtickets.c
+//                    without its AM_DeleteTicket): AMNET_InstallTicketBegin, FSFILE_Write, AMNET_InstallTicketFinish,
+//                    or AMNET_InstallTicketAbort when the write failed
 //   phase 1, am:net: AMNET_InstallTitleBegin, AMNET_InstallTmdBegin, FSFILE_Write, AMNET_InstallTmdFinish,
 //                    AMNET_InstallContentBegin(0), FSFILE_Write, AMNET_InstallContentFinish,
 //                    AMNET_InstallTitleFinish, AMNET_CommitImportTitles
@@ -31,6 +35,7 @@
 // What AM answers for a DLC title that is not installed: Anemone3DS v3.0.1 (source/themes.c l.519, dump_all_themes)
 // ends its walk over the theme variations on this result of AMAPP_GetDLCContentInfoCount.
 #define AM_TITLE_NOT_FOUND ((Result)0xD8A083FA)
+#define TICKET_PIECE 256        // title IDs per AM_GetTicketList: a console with thousands of tickets is read in pieces
 
 static FILE *logfile;
 static int log_strict, log_waits;
@@ -135,9 +140,12 @@ void console_log_view(const char *when, const am_view *v)
     console_log("-- AM view %s: %s, installed %s, version %u, %u contents, pending %s", when,
                 v->ok ? "read" : "NOT READ", v->exists ? "yes" : "no", v->version, (unsigned)v->count,
                 v->pending == PENDING_NO ? "no" : v->pending == PENDING_YES ? "YES" : "UNKNOWN");
+    if (v->ok && !v->exists)
+        console_log("   no title; a ticket for it: %s", v->ticket ? "yes (a first install keeps it)" : "no");
     for (size_t k = 0; k < v->count; k++)
         console_log("   %3u  %08" PRIX32 " %10llu  %s", v->list[k].index, v->list[k].id,
-                    (unsigned long long)v->list[k].size, v->usable[k] ? "installed, owned" : "NOT installed/owned");
+                    (unsigned long long)v->list[k].size, v->usable[k] ? "installed, owned"
+                    : v->installed[k] ? "installed, NOT owned" : "NOT installed/owned");
 }
 
 // ---------------------------------------------------------------- status (am:sys)
@@ -162,6 +170,37 @@ static int this_title_pending(void)
         if (ids[i] == TP_TITLE_ID)
             return PENDING_YES;
     return PENDING_NO;
+}
+
+/* Whether the console has a ticket for the pack title: the count, then the list of the tickets' title IDs in pieces
+ * (FBI's ticket list reads it in one call). A list that ends before the count is an error (-1): a ticket there may be
+ * among the unread. */
+static Result this_title_ticket(int *found)
+{
+    static u64 ids[TICKET_PIECE];
+    u32 count = 0;
+    *found = 0;
+    Result res = logged("AM_GetTicketCount", AM_GetTicketCount(&count));
+    if (R_FAILED(res))
+        return res;
+    for (u32 skip = 0; skip < count && !*found;) {
+        u32 want = count - skip < TICKET_PIECE ? count - skip : TICKET_PIECE, got = 0;
+        char call[64];
+        snprintf(call, sizeof call, "AM_GetTicketList %" PRIu32 " at %" PRIu32, want, skip);
+        res = logged(call, AM_GetTicketList(&got, want, skip, ids));
+        if (R_FAILED(res))
+            return res;
+        if (got == 0 || got > want) {
+            console_log("The ticket list gave %" PRIu32 " of %" PRIu32 " at %" PRIu32 " of %" PRIu32 " tickets", got,
+                        want, skip, count);
+            return -1;
+        }
+        for (u32 i = 0; i < got; i++)
+            *found |= ids[i] == TP_TITLE_ID;
+        skip += got;
+    }
+    console_log("%" PRIu32 " tickets, %s for %016llX", count, *found ? "one" : "none", TP_TITLE_ID);
+    return 0;
 }
 
 void console_read_am(am_view *v)
@@ -190,6 +229,15 @@ void console_read_am(am_view *v)
             amExit();
             return;
         }
+        // Not installed: whether a ticket is there decides whether a first install brings one. Unknown is an error
+        // (nothing is then written), never "no ticket".
+        int found = 0;
+        if (R_FAILED(res = this_title_ticket(&found))) {
+            v->error = (u32)res;
+            amExit();
+            return;
+        }
+        v->ticket = found;
     }
     if (v->exists) {
         res = logged("AMAPP_GetDLCContentInfoCount", AMAPP_GetDLCContentInfoCount(&count, MEDIA, tid));
@@ -206,6 +254,7 @@ void console_read_am(am_view *v)
         }
         for (u32 i = 0; i < read && i < PACK_CONTENTS; i++) {
             v->list[v->count] = (tp_am_content){infos[i].index, infos[i].contentId, infos[i].size};
+            v->installed[v->count] = (infos[i].flags & AM_CONTENT_INSTALLED) != 0;
             v->usable[v->count++] = (infos[i].flags & (AM_CONTENT_INSTALLED | AM_CONTENT_OWNED)) ==
                                     (AM_CONTENT_INSTALLED | AM_CONTENT_OWNED);
         }
@@ -360,6 +409,24 @@ static int imp_tmd(void *ctx, const uint8_t *tmd, size_t size)
     return R_FAILED(logged("AMNET_InstallTmdFinish", AMNET_InstallTmdFinish(imp_state.tmd, true))) ? -1 : 0;
 }
 
+/* As FBI installs a ticket (installtickets.c: begin, write, finish when the write went through, else abort), without
+ * the AM_DeleteTicket FBI makes first: it is called only when the console has no ticket for the title. */
+static int imp_ticket(void *ctx, const uint8_t *ticket, size_t size)
+{
+    (void)ctx;
+    Handle h;
+    if (session() || R_FAILED(logged("AMNET_InstallTicketBegin", AMNET_InstallTicketBegin(&h))))
+        return -1;
+    u32 written = 0;
+    Result res = logged("FSFILE_Write (ticket)", FSFILE_Write(h, &written, 0, ticket, size, 0));
+    if (R_FAILED(res) || written != size) {
+        console_log("ticket: %" PRIu32 " of %u bytes written", written, (unsigned)size);
+        logged("AMNET_InstallTicketAbort", AMNET_InstallTicketAbort(h));
+        return -1;
+    }
+    return R_FAILED(logged("AMNET_InstallTicketFinish", AMNET_InstallTicketFinish(h))) ? -1 : 0;
+}
+
 static int imp_contexts(void *ctx, const uint16_t *indices, size_t count)
 {
     (void)ctx;
@@ -464,7 +531,7 @@ void console_importer(importer *imp)
 {
     memset(&imp_state, 0, sizeof imp_state);
     *imp = (importer){NULL, imp_title_begin, imp_tmd, imp_contexts, imp_content_begin, imp_content_write,
-                      imp_content_finish, imp_commit, imp_cancel};
+                      imp_content_finish, imp_commit, imp_cancel, imp_ticket};
 }
 
 // ---------------------------------------------------------------- HOME's data and the delete

@@ -134,10 +134,15 @@ int pack_assess(pack_view *pv, const am_view *am, const store_record rec[2], uin
     pv->error = am->error;
     if (!am->ok)
         return pv->state = PACK_AM_ERROR;
-    if (!am->exists)
-        return pv->state = PACK_NOT_INSTALLED;
+    /* before the title: an import pending of a title AM does not know (a first install not cleaned up) refuses too */
     if (am->pending != PENDING_NO)
         return pv->state = am->pending == PENDING_YES ? PACK_PENDING : PACK_PENDING_UNKNOWN;
+    if (!am->exists) {
+        /* no title: an earlier pack's record files do not count, its mark does (the first install's index) */
+        pv->top = mark;
+        pv->ticket = am->ticket;
+        return pv->state = PACK_NOT_INSTALLED;
+    }
     pv->version = am->version;
     if ((pv->state = pick_record(pv, am, rec)) != PACK_OK)
         return pv->state;
@@ -158,6 +163,11 @@ int pack_assess(pack_view *pv, const am_view *am, const store_record rec[2], uin
     if (tp_next_index(used, pv->count, pv->top, &next) != TP_OK)
         return pv->state = PACK_FULL_INDEX;
     return pv->state = PACK_OK;
+}
+
+int pack_takes(const pack_view *pv)
+{
+    return pv->state == PACK_OK || pv->state == PACK_NOT_INSTALLED;
 }
 
 void pack_free(pack_view *pv)
@@ -219,11 +229,30 @@ void plan_catalogue(const install_plan *plan, tp_catalogue *cat)
     *cat = (tp_catalogue){plan->entries, plan->count, plan->top, plan_icon, (void *)plan};
 }
 
+/* The first install: AM knows no index, so only the mark counts; the catalogue holds the one theme, up to its index
+ * (an index below it that an earlier pack handed out is listed as "(removed)"). */
+static int plan_first(install_plan *p, const pack_view *pv, const tp_theme *theme)
+{
+    p->first = 1;
+    p->new_ticket = !pv->ticket;
+    int r = tp_next_index(NULL, 0, pv->top, &p->index);
+    if (r) {
+        p->detail = r;
+        return p->state = r == TP_E_INDEX ? PLAN_FULL_INDEX : PLAN_CORE;
+    }
+    p->entries[0] = (tp_entry){p->index, theme->name, theme->description};
+    p->count = 1;
+    p->top = p->index;
+    return p->state = PLAN_OK;
+}
+
 int plan_install(install_plan *p, const pack_view *pv, const tp_theme *theme)
 {
     memset(p, 0, sizeof *p);
     p->pv = pv;
     p->theme = theme;
+    if (pv->state == PACK_NOT_INSTALLED)
+        return plan_first(p, pv, theme);
     if (pv->state != PACK_OK) {
         p->detail = TP_E_ARG;
         return p->state = PLAN_CORE;

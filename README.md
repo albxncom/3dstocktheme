@@ -23,15 +23,16 @@ The pictures are drawn by the project's own renderer with stand-in themes: a vio
 
 - **Homebrew access**: a 3DS with custom firmware and a title installer such as FBI.
 - **A European console**: the application works on the European theme title (`0004008C00009809`) and has only run on a European New 3DS XL. Other regions are untested and not expected to work.
-- **The theme pack, installed once**: the application adds themes to an installed pack and cannot create it. Build the pack on a computer with [`tools/theme-pack`](tools/theme-pack/README.md) and install it with FBI; read that page's warning about the target title first.
-- **For sound**: the DSP firmware dump on the card (`sdmc:/3ds/dspfirm.cdc`).
-- **A backup**: the application writes to the theme title and to the HOME Menu's badge data. Back up your SD card and your badge data before you use it.
+- **Nothing else to install first**: the first theme you install creates the theme pack on title `0004008C00009809` and its record on the SD card; every later theme is added to it. A pack built on a computer with [`tools/theme-pack`](tools/theme-pack/README.md) still works, with its record copied to the card ([Seeding the record from the Mac](docs/README.md#seeding-the-record-from-the-mac)).
+- **Never remove the pack in System Settings, Data Management**: it lists all theme titles as one entry, so it would very likely remove the official themes too ([why](tools/theme-pack/README.md#install-console)). To remove the pack, delete the title and the ticket of `0004008C00009809` in FBI, after checking the ID digit by digit.
+- **For sound**: the DSP firmware dump on the card (`sdmc:/3ds/dspfirm.cdc`); without it the application runs silent. To make it with Luma3DS: in the HOME Menu, press L + D-Pad Down + Select to open the Rosalina menu, choose "Miscellaneous options", then "Dump DSP firmware". Rosalina writes the file to that place; start the application again afterwards.
+- **A backup**: the application writes to the theme title and to the HOME Menu's badge data. The first install, which creates the theme pack, is new in 1.0.0-beta.2 and has not run on a console yet. Back up your SD card and your badge data before you use it.
 
 ## Install
 
 Take `3DStockTheme.cia` from the [releases](https://github.com/albxncom/3dstocktheme/releases) and install it with FBI, or put `3DStockTheme.3dsx` into `/3ds/` and start it from the Homebrew Launcher.
 
-Or straight on the console: in FBI choose "Remote Install", then "Scan QR Code", and scan this code. It holds the address of the latest release's CIA, so the same code also updates an installed copy.
+Or straight on the console: in FBI choose "Remote Install", then "Scan QR Code", and scan this code. It holds the address of the latest release's CIA, so the same code also updates an installed copy. The application is all the console needs: it creates the theme pack itself with the first theme, so no computer is involved.
 
 <img src="docs/img/install-qr.png" width="180" alt="A QR code with the address of the latest release's 3DStockTheme.cia">
 
@@ -69,7 +70,7 @@ The most useful first step is a test on a console of another region, with a back
 
 ## Status
 
-Version 1.0.0-beta.1. What it cannot do yet is listed under [Limits](docs/README.md#limits): among other things one theme per install, at most 100 themes in the pack, and only the last badge set can be removed.
+Version 1.0.0-beta.2. What it cannot do yet is listed under [Limits](docs/README.md#limits): among other things one theme per install, at most 100 themes in the pack, and only the last badge set can be removed.
 
 ## Credits and licence
 

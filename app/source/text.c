@@ -150,6 +150,7 @@ static const char *const FIXED[T_COUNT][2] = {
     [T_TRY_AGAIN] = {"Go back and try again. If it happens again, restart the console.",
                      "Gehe zurück und versuche es erneut. Kommt es wieder, starte die Konsole neu."},
     [T_SOUNDS_CREDIT] = {"Interface sounds by Kenney (kenney.nl), CC0", "Bedientöne von Kenney (kenney.nl), CC0"},
+    [T_CREATES_PACK] = {"Installing it also creates the theme pack", "Das Installieren legt auch das Design-Paket an"},
 };
 
 const char *text(int lang, int id)
@@ -262,13 +263,24 @@ static void difference(int de_, const tp_difference *d, uint16_t installed, char
     }
 }
 
-/* The way back after themes were lost: English after a colon or comma, German as its own clause. */
+/* The way back after themes were lost: English after a colon or comma, German as its own clause. Without a computer
+ * the pack goes and the first install makes it anew; a pack built on a computer can also come back from its CIA. */
 static const char *recover(int de_)
 {
-    return L("reinstall the pack CIA with FBI (" PACK_CIA "); themes added after that CIA was built have to be "
-             "added again.",
-             "Installiere die CIA des Pakets mit FBI neu (" PACK_CIA "); Designs, die nach dem Bau dieser CIA "
-             "dazukamen, müssen danach erneut hinzugefügt werden.");
+    return L("in FBI delete the title and the ticket of 0004008C00009809, then install the themes again here; for a "
+             "pack built on a computer, reinstall its CIA with FBI and add the later themes again.",
+             "Lösche in FBI Titel und Ticket von 0004008C00009809, dann installiere die Designs hier erneut; ein am "
+             "Computer gebautes Paket: installiere seine CIA mit FBI neu und füge die späteren Designs erneut hinzu.");
+}
+
+/* A record or catalogue that cannot be used: the way out without a computer, a sentence of its own in both
+ * languages; the texts add the way for a pack built on a computer after it. */
+static const char *anew(int de_)
+{
+    return L("Without a computer: in FBI delete the title and the ticket of 0004008C00009809, then install the themes "
+             "again here.",
+             "Ohne Computer: Lösche in FBI Titel und Ticket von 0004008C00009809, dann installiere die Designs hier "
+             "erneut.");
 }
 
 static const char *pending_fbi(int de_)
@@ -285,6 +297,7 @@ void text_pack(int lang, const pack_view *pv, char *title, size_t title_size, ch
     title[0] = body[0] = 0;
     switch (pv->state) {
     case PACK_OK:
+    case PACK_NOT_INSTALLED:    /* the first install creates it: as an empty pack */
         set(title, title_size, text(lang, T_INSTALL_THEME));
         text_installed(lang, (unsigned)pv->usable, body, body_size);
         break;
@@ -295,14 +308,6 @@ void text_pack(int lang, const pack_view *pv, char *title, size_t title_size, ch
                                "AM hat mit Fehler %08X geantwortet. Starte die Konsole neu und versuche es erneut; "
                                "bleibt er, melde den Code. Es wurde nichts verändert."),
             (unsigned)pv->error);
-        break;
-    case PACK_NOT_INSTALLED:
-        set(title, title_size, L("No theme pack installed", "Kein Design-Paket installiert"));
-        add(body, body_size, L("This version adds themes to an installed theme pack (title 0004008C00009809); it does "
-                               "not install a new pack. Install the pack CIA with FBI first.",
-                               "Diese Version fügt Designs zu einem installierten Design-Paket (Titel "
-                               "0004008C00009809) hinzu; ein neues Paket legt sie nicht an. Installiere zuerst die "
-                               "CIA des Pakets mit FBI."));
         break;
     case PACK_PENDING:
         set(title, title_size, L("An import is pending", "Ein Import ist offen"));
@@ -319,51 +324,52 @@ void text_pack(int lang, const pack_view *pv, char *title, size_t title_size, ch
         break;
     case PACK_NO_STORE:
         set(title, title_size, L("No record of the installed pack", "Keine Aufzeichnung des installierten Pakets"));
-        add(body, body_size, L(CARD_DIR "/installed.tmd is missing. It holds the TMD of the installed pack, which "
-                               "AM does not hand out; this application does not guess it. Copy it there from the Mac "
-                               "(README, The record). If this application installed themes since the Mac recorded "
-                               "the pack, the Mac does not have it: reinstall the pack CIA with FBI, then copy that "
-                               "CIA's TMD.",
-                               CARD_DIR "/installed.tmd fehlt. Die Datei enthält die TMD des installierten Pakets, die "
-                               "AM nicht herausgibt; diese Anwendung rät sie nicht. Kopiere sie vom Mac dorthin "
-                               "(README, The record). Hat diese Anwendung seit der Aufzeichnung auf dem Mac Designs "
-                               "installiert, hat der Mac sie nicht: installiere die CIA des Pakets mit FBI neu und "
-                               "kopiere dann deren TMD."));
+        add(body, body_size, L(CARD_DIR "/installed.tmd is missing: it holds the installed pack's TMD, which AM does "
+                               "not hand out. %s For a pack built on a computer: copy its TMD there (README, The "
+                               "record); if themes were installed here since, reinstall its CIA with FBI first.",
+                               CARD_DIR "/installed.tmd fehlt: die Datei enthält die TMD des installierten Pakets, die "
+                               "AM nicht herausgibt. %s Ein am Computer gebautes Paket: kopiere seine TMD dorthin "
+                               "(README, The record); kamen seither hier Designs dazu, installiere zuerst seine CIA "
+                               "mit FBI neu."),
+            anew(de_));
         break;
     case PACK_STORE_BAD:
         set(title, title_size, L("The record is damaged", "Die Aufzeichnung ist beschädigt"));
-        add(body, body_size, L(CARD_DIR "/installed.tmd is not a TMD of the theme pack: %s Copy it again from the "
-                               "Mac.",
-                               CARD_DIR "/installed.tmd ist keine TMD des Design-Pakets: %s Kopiere sie erneut vom "
-                               "Mac."),
-            text_result(lang, pv->detail));
+        add(body, body_size, L(CARD_DIR "/installed.tmd is not a TMD of the theme pack: %s %s For a pack built on a "
+                               "computer: copy its TMD there again.",
+                               CARD_DIR "/installed.tmd ist keine TMD des Design-Pakets: %s %s Ein am Computer gebautes "
+                               "Paket: kopiere seine TMD erneut dorthin."),
+            text_result(lang, pv->detail), anew(de_));
         break;
     case PACK_STALE:
         set(title, title_size, L("The record is out of date", "Die Aufzeichnung ist veraltet"));
         add(body, body_size, L(CARD_DIR "/installed.tmd does not match what AM reports: ",
                                CARD_DIR "/installed.tmd passt nicht zu dem, was AM meldet: "));
         difference(de_, &pv->diff, pv->version, body, body_size);
-        add(body, body_size, L(". Something other than this application changed the pack, a reinstall with FBI "
-                               "for example: copy the TMD of the CIA that was installed from the Mac (README, The "
-                               "record). If this application changed the pack last, its record is lost: reinstall "
-                               "the pack CIA with FBI, then copy that CIA's TMD.",
-                               ". Etwas anderes als diese Anwendung hat das Paket verändert, zum Beispiel eine "
-                               "Neuinstallation mit FBI: kopiere die TMD der installierten CIA vom Mac (README, The "
-                               "record). Hat zuletzt diese Anwendung das Paket verändert, ist ihre Aufzeichnung "
-                               "verloren: installiere die CIA des Pakets mit FBI neu und kopiere dann deren TMD."));
+        add(body, body_size, L(". Something other than this application changed the pack, or its record is lost. %s "
+                               "For a pack built on a computer: copy the TMD of the CIA installed last there (README, "
+                               "The record); if this application changed the pack since, reinstall that CIA with FBI "
+                               "first.",
+                               ". Etwas anderes als diese Anwendung hat das Paket verändert, oder ihre Aufzeichnung ist "
+                               "verloren. %s Ein am Computer gebautes Paket: kopiere die TMD der zuletzt installierten "
+                               "CIA dorthin (README, The record); hat diese Anwendung das Paket seither verändert, "
+                               "installiere zuerst diese CIA mit FBI neu."),
+            anew(de_));
         break;
     case PACK_NO_CATALOGUE:
         set(title, title_size, L("The pack's catalogue is missing", "Der Katalog des Pakets fehlt"));
         add(body, body_size, L("Content 0 of the theme pack is not installed, so the HOME Menu cannot list its "
-                               "themes. Reinstall the pack CIA with FBI (" PACK_CIA ").",
+                               "themes. %s For a pack built on a computer: reinstall its CIA with FBI (" PACK_CIA ").",
                                "Inhalt 0 des Design-Pakets ist nicht installiert, also kann das HOME-Menü seine "
-                               "Designs nicht auflisten. Installiere die CIA des Pakets mit FBI neu (" PACK_CIA ")."));
+                               "Designs nicht auflisten. %s Ein am Computer gebautes Paket: installiere seine CIA mit "
+                               "FBI neu (" PACK_CIA ")."),
+            anew(de_));
         break;
     case PACK_CATALOGUE_BAD:
         set(title, title_size, L("Cannot read the pack's catalogue", "Katalog des Pakets nicht lesbar"));
-        add(body, body_size, L("%s Reinstall the pack CIA with FBI (" PACK_CIA ").",
-                               "%s Installiere die CIA des Pakets mit FBI neu (" PACK_CIA ")."),
-            text_result(lang, pv->detail));
+        add(body, body_size, L("%s %s For a pack built on a computer: reinstall its CIA with FBI (" PACK_CIA ").",
+                               "%s %s Ein am Computer gebautes Paket: installiere seine CIA mit FBI neu (" PACK_CIA ")."),
+            text_result(lang, pv->detail), anew(de_));
         break;
     case PACK_FULL_THEMES:
         set(title, title_size, L("The theme pack is full", "Das Design-Paket ist voll"));
@@ -528,6 +534,7 @@ static const char *step_name(int de_, int step)
     case STEP_COMMIT1: case STEP_COMMIT2: return L("the commit", "Abschluss");
     case STEP_CONTEXT: return L("the import context", "Import-Kontext");
     case STEP_CONTENT: return L("writing the theme", "Schreiben des Designs");
+    case STEP_TICKET: return L("installing the ticket", "Ticket-Installation");
     default: return L("an AM step", "ein AM-Schritt");
     }
 }
@@ -560,6 +567,13 @@ void text_outcome(int lang, const judgement *j, const install_result *res, const
                                    "laut AM sind danach %u vorher installierte(s) Design(s) nicht mehr installiert. "
                                    "Weg zurück: %s"),
                 (unsigned)j->lost, recover(de_));
+        else if (j->not_owned)
+            add(body, body_size, L("its list shows the theme as installed and not owned: a ticket found on the console "
+                                   "does not cover it. In FBI delete the title and the ticket of 0004008C00009809, then "
+                                   "install again here.",
+                                   "seine Liste zeigt das Design als installiert, aber nicht im Besitz: ein Ticket, das "
+                                   "schon auf der Konsole war, deckt es nicht ab. Lösche in FBI Titel und Ticket von "
+                                   "0004008C00009809, dann installiere hier erneut."));
         else if (!j->new_installed)
             add(body, body_size, L("its list does not show the new theme as installed. Restart the console and look "
                                    "in Change Theme.",
@@ -571,7 +585,10 @@ void text_outcome(int lang, const judgement *j, const install_result *res, const
         break;
     case OUT_NOTHING_WRITTEN:
         set(title, title_size, L("Nothing was installed", "Nichts installiert"));
-        if (res->failed == STEP_MEASURE)
+        if (res->failed == STEP_MEASURE && j->first && res->detail == TP_E_STALE)  /* still_same: no record to match */
+            add(body, body_size, L("What AM reports about the theme pack changed since the check. ",
+                                   "Was AM über das Design-Paket meldet, hat sich seit der Prüfung geändert. "));
+        else if (res->failed == STEP_MEASURE)
             add(body, body_size, "%s ", text_result(lang, res->detail));
         else if (res->failed == STEP_STAGE)
             add(body, body_size, L("The record could not be written to the SD card. ",
@@ -582,21 +599,48 @@ void text_outcome(int lang, const judgement *j, const install_result *res, const
         break;
     case OUT_CANCELLED_KEPT:
         set(title, title_size, L("Not installed", "Nicht installiert"));
-        add(body, body_size, L("The import failed (%s) and was cancelled. AM lists every theme that was installed "
-                               "as still installed; \"%s\" was not added.",
-                               "Der Import ist gescheitert (%s) und wurde abgebrochen. Laut AM sind alle vorher "
-                               "installierten Designs weiter installiert; \"%s\" wurde nicht hinzugefügt."),
-            step_name(de_, res->failed), name);
+        if (j->first)
+            add(body, body_size, L("The import failed (%s) and was cancelled. The theme pack was not created; \"%s\" "
+                                   "was not added.",
+                                   "Der Import ist gescheitert (%s) und wurde abgebrochen. Das Design-Paket wurde nicht "
+                                   "angelegt; \"%s\" wurde nicht hinzugefügt."),
+                step_name(de_, res->failed), name);
+        else
+            add(body, body_size, L("The import failed (%s) and was cancelled. AM lists every theme that was installed "
+                                   "as still installed; \"%s\" was not added.",
+                                   "Der Import ist gescheitert (%s) und wurde abgebrochen. Laut AM sind alle vorher "
+                                   "installierten Designs weiter installiert; \"%s\" wurde nicht hinzugefügt."),
+                step_name(de_, res->failed), name);
         break;
     case OUT_PHASE2_FAILED_KEPT:
+        if (j->first && j->new_installed) {     /* a failure AM carried out all the same */
+            set(title, title_size, L("Installed, not confirmed", "Installiert, nicht bestätigt"));
+            add(body, body_size, L("The import reported a failure (%s), but AM lists the theme pack as created and "
+                                   "\"%s\" as installed. Choose it in Change Theme; if it is not listed, restart the "
+                                   "console.",
+                                   "Der Import hat einen Fehler gemeldet (%s), aber laut AM ist das Design-Paket "
+                                   "angelegt und \"%s\" installiert. Wähle es unter Design ändern; fehlt es dort, starte "
+                                   "die Konsole neu."),
+                step_name(de_, res->failed), name);
+            break;
+        }
         set(title, title_size, L("Not installed", "Nicht installiert"));
-        add(body, body_size, L("The catalogue was updated, but the theme itself failed (%s), so the HOME Menu does "
-                               "not list it. AM lists every theme that was installed as still installed. Trying again "
-                               "adds it under a new number.",
-                               "Der Katalog wurde erneuert, aber das Design selbst ist gescheitert (%s), darum zeigt "
-                               "das HOME-Menü es nicht. Laut AM sind alle vorher installierten Designs weiter "
-                               "installiert. Ein neuer Versuch fügt es unter einer neuen Nummer hinzu."),
-            step_name(de_, res->failed));
+        if (j->first)
+            add(body, body_size, L("The import failed (%s). AM lists the theme pack as created, but \"%s\" as not "
+                                   "installed, so the HOME Menu does not list it. Install it again here: it is added "
+                                   "under a new number.",
+                                   "Der Import ist gescheitert (%s). Laut AM ist das Design-Paket angelegt, \"%s\" aber "
+                                   "nicht installiert, darum zeigt das HOME-Menü es nicht. Installiere es hier erneut: "
+                                   "es kommt unter einer neuen Nummer dazu."),
+                step_name(de_, res->failed), name);
+        else
+            add(body, body_size, L("The catalogue was updated, but the theme itself failed (%s), so the HOME Menu does "
+                                   "not list it. AM lists every theme that was installed as still installed. Trying "
+                                   "again adds it under a new number.",
+                                   "Der Katalog wurde erneuert, aber das Design selbst ist gescheitert (%s), darum zeigt "
+                                   "das HOME-Menü es nicht. Laut AM sind alle vorher installierten Designs weiter "
+                                   "installiert. Ein neuer Versuch fügt es unter einer neuen Nummer hinzu."),
+                step_name(de_, res->failed));
         break;
     case OUT_LOST:
         set(title, title_size, L("Failed, themes lost", "Fehlgeschlagen, Designs verloren"));
@@ -608,6 +652,16 @@ void text_outcome(int lang, const judgement *j, const install_result *res, const
         break;
     default:
         set(title, title_size, L("Failed", "Fehlgeschlagen"));
+        if (j->first) {
+            add(body, body_size, L("The import failed (%s) and was cancelled. AM's list could not be read afterwards, "
+                                   "so whether the theme pack was created is unknown. Restart the console and start "
+                                   "this application again: it shows what is installed.",
+                                   "Der Import ist gescheitert (%s) und wurde abgebrochen. Die Liste von AM war danach "
+                                   "nicht lesbar; ob das Design-Paket angelegt wurde, ist unbekannt. Starte die Konsole "
+                                   "neu und dann diese Anwendung: sie zeigt, was installiert ist."),
+                step_name(de_, res->failed));
+            break;
+        }
         add(body, body_size, L("The import failed (%s) and was cancelled. AM's list could not be read afterwards, "
                                "so whether the installed themes are still there is unknown. Restart the console and "
                                "look in Change Theme. If themes are missing, %s",

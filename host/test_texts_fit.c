@@ -188,7 +188,7 @@ static void texts_of(int lang)
                 for (int pending = PENDING_NO; pending <= PENDING_UNKNOWN; pending++)
                     for (int lost = 1; lost <= 12; lost += 11)
                         for (int k = 0; k < 4; k++) {
-                            judgement j = {out, k & 1, (size_t)lost, k >> 1, pending};
+                            judgement j = {out, k & 1, (size_t)lost, k >> 1, pending, 0, 0};
                             install_result res;
                             memset(&res, 0, sizeof res);
                             res.failed = step;
@@ -198,6 +198,30 @@ static void texts_of(int lang)
                                      out, step, pending, lost, k, nm, lang);
                             box(what, title, body);
                         }
+    /* the first install's outcomes: nothing lost (the console had no theme of the pack), every step and the ticket's
+     * (numbered after STEP_DONE), a ticket found that does not cover the theme, AM's view changed before the write */
+    for (int nm = 0; nm < (sweep ? 1 : 2) && varied(NAME_THEME); nm++)
+        for (int out = OUT_DONE; out <= OUT_UNKNOWN; out++)
+            for (int step = STEP_NONE; step <= STEP_TICKET; step++)
+                for (int pending = PENDING_NO; pending <= PENDING_UNKNOWN; pending++)
+                    for (int k = 0; k < 8; k++) {
+                        judgement j = {out, k & 1, 0, k >> 1 & 1, pending, 1, k >> 2};
+                        install_result res;
+                        memset(&res, 0, sizeof res);
+                        res.failed = step;
+                        res.detail = k & 1 ? TP_E_STALE : TP_E_ZIP;
+                        text_outcome(lang, &j, &res, names[nm], title, sizeof title, body, sizeof body);
+                        snprintf(what, sizeof what, "first outcome %d step %d pending %d k %d name %d lang %d", out,
+                                 step, pending, k, nm, lang);
+                        box(what, title, body);
+                    }
+    if (!sweep) {   /* the check screen's footer before a first install: one line beside the house, never cut */
+        float room = TOP_W - 2 * TOP_PAD - ui_ew(ART_HOME_FOOT) - FOOT_ICON_GAP,
+              w = ui_text_width(text(lang, T_CREATES_PACK), LINE_PX);
+        snprintf(what, sizeof what, "the first install's footer in language %d: \"%s\" %.0f px wide, room %.0f px",
+                 lang, text(lang, T_CREATES_PACK), w, room);
+        check(w <= room, what);
+    }
     static const int CODES[3] = {0, (int)0xC92044E6u, (int)0xFFFFFFFFu};
     for (int oc = BFLOW_DONE; oc <= BFLOW_UNKNOWN && varied(NAME_SET); oc++)
         for (int stage = 0; stage <= 19; stage++)
@@ -289,7 +313,7 @@ static void texts_of(int lang)
 static void probe_matches(void)
 {
     char title[300], body[2000], best[2000] = "", best_title[300] = "";
-    judgement j = {OUT_UNKNOWN, 0, 12, 0, PENDING_YES};
+    judgement j = {OUT_UNKNOWN, 0, 12, 0, PENDING_YES, 0, 0};
     install_result res;
     memset(&res, 0, sizeof res);
     for (int step = STEP_NONE; step <= STEP_DONE; step++) {

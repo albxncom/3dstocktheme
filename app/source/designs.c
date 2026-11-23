@@ -5,7 +5,8 @@
 
 int designs_readable(const pack_view *pv)
 {
-    return pv->state == PACK_OK || pv->state == PACK_FULL_THEMES || pv->state == PACK_FULL_INDEX;
+    return pv->state == PACK_OK || pv->state == PACK_FULL_THEMES || pv->state == PACK_FULL_INDEX ||
+           pv->state == PACK_NOT_INSTALLED;
 }
 
 void designs_list(design_list *d, const pack_view *pv, const uint8_t music_of[PACK_CONTENTS])
@@ -51,5 +52,5 @@ unsigned designs_room(const pack_view *pv)
 unsigned designs_room_low(const pack_view *pv)
 {
     unsigned room = designs_room(pv);
-    return pv->state == PACK_OK && room < DESIGNS_ROOM_LOW ? room : 0;
+    return pack_takes(pv) && room < DESIGNS_ROOM_LOW ? room : 0;
 }

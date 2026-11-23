@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sha256.h"
 #include "store.h"
 
 typedef struct mem_sink {
@@ -69,32 +70,27 @@ static int write_content(const importer *imp, const install_progress *progress, 
     return imp->content_finish(imp->ctx) ? -1 : 0;
 }
 
-int install_run(const install_plan *plan, const tp_theme *theme, const importer *imp, const char *store_dir,
-                const install_progress *progress, install_result *res)
+/* The delta's pieces: content 0 (the plan's new ID) and the theme measured, the new TMD built from the installed one
+ * (tp_delta_tmd) into *out and checked. */
+static int delta_pieces(const install_plan *plan, const tp_theme *theme, const tp_catalogue *cat, install_result *res,
+                        uint8_t **out, size_t *out_size)
 {
-    memset(res, 0, sizeof *res);
     const pack_view *pv = plan->pv;
-    tp_catalogue cat;
-    plan_catalogue(plan, &cat);
     uint64_t title;
     uint16_t version;
     size_t installed = 0, size = 0;
     uint8_t *tmd = NULL;
-    int r = plan->state == PLAN_OK ? TP_OK : TP_E_ARG;
-
-    /* Everything the core can refuse happens here, before the first AM write. */
-    res->failed = STEP_MEASURE;
-    show(progress, STEP_MEASURE, 0, 1);
+    int r = tp_tmd_read(pv->tmd, pv->tmd_size, &title, &version, &installed);
     if (!r)
-        r = tp_tmd_read(pv->tmd, pv->tmd_size, &title, &version, &installed);
-    if (!r)
-        r = tp_catalogue_content(&cat, TP_TITLE_ID, plan->delta.content0_id, NULL, &res->content0);
+        r = tp_catalogue_content(cat, TP_TITLE_ID, plan->delta.content0_id, NULL, &res->content0);
     if (!r)
         r = tp_theme_content(theme, TP_TITLE_ID, plan->index, NULL, &res->theme);
     if (!r)
         size = tp_delta_tmd_size(&plan->delta, installed);
     if (!r && !(tmd = malloc(size)))
         r = TP_E_NOMEM;
+    *out = tmd;
+    *out_size = size;
     mem_sink m = {tmd, 0, size};
     tp_sink tmd_sink = {&m, mem_write};
     if (!r)
@@ -117,6 +113,71 @@ int install_run(const install_plan *plan, const tp_theme *theme, const importer 
         if (k < installed ? !same_record(&old, &now) : !same_record(&res->theme, &now))
             r = TP_E_TMD;
     }
+    return r;
+}
+
+/* The first install's pieces, as tpack pack builds a pack of one theme (host/tpack.c): content 0 with ID 0 and the
+ * theme with ID = index measured, the TMD at version 0 into *out and read back (this title, version 0, the two
+ * records as measured), then the ticket, its ID and title key from the TMD's SHA-256. */
+static int first_pieces(const install_plan *plan, const tp_theme *theme, const tp_catalogue *cat, install_result *res,
+                        uint8_t **out, size_t *out_size, uint8_t ticket[TP_TICKET_SIZE])
+{
+    int r = tp_catalogue_content(cat, TP_TITLE_ID, 0, NULL, &res->content0);
+    if (!r)
+        r = tp_theme_content(theme, TP_TITLE_ID, plan->index, NULL, &res->theme);
+    if (r)
+        return r;
+    size_t size = tp_tmd_size(2);
+    uint8_t *tmd = malloc(size);
+    *out = tmd;
+    *out_size = size;
+    if (!tmd)
+        return TP_E_NOMEM;
+    const tp_content records[2] = {res->content0, res->theme};
+    mem_sink m = {tmd, 0, size};
+    tp_sink tmd_sink = {&m, mem_write};
+    if ((r = tp_tmd(TP_TITLE_ID, 0, records, 2, &tmd_sink)) != TP_OK)
+        return r;
+    if (m.size != size)
+        return TP_E_ARG;
+    uint64_t title = 0;
+    uint16_t version = 1;
+    size_t count = 0;
+    tp_content back[2];
+    if ((r = tp_tmd_read(tmd, size, &title, &version, &count)) != TP_OK)
+        return r;
+    if (title != TP_TITLE_ID || version != 0 || count != 2 || tp_tmd_record(tmd, size, 0, &back[0]) ||
+        tp_tmd_record(tmd, size, 1, &back[1]) || !same_record(&back[0], &res->content0) ||
+        !same_record(&back[1], &res->theme))
+        return TP_E_TMD;
+    uint8_t digest[32];
+    sha256(tmd, size, digest);  /* ticket ID and title key: reproducible, different per pack (tpack pack) */
+    uint64_t ticket_id = 0x0004000000000000ull;
+    for (int k = 0; k < 6; k++)
+        ticket_id |= (uint64_t)digest[k] << (8 * (5 - k));
+    mem_sink t = {ticket, 0, TP_TICKET_SIZE};
+    tp_sink ticket_sink = {&t, mem_write};
+    if ((r = tp_ticket(TP_TITLE_ID, ticket_id, digest + 16, &ticket_sink)) != TP_OK)
+        return r;
+    return t.size == TP_TICKET_SIZE ? TP_OK : TP_E_ARG;
+}
+
+int install_run(const install_plan *plan, const tp_theme *theme, const importer *imp, const char *store_dir,
+                const install_progress *progress, install_result *res)
+{
+    memset(res, 0, sizeof *res);
+    const pack_view *pv = plan->pv;
+    tp_catalogue cat;
+    plan_catalogue(plan, &cat);
+    size_t size = 0;
+    uint8_t *tmd = NULL, ticket[TP_TICKET_SIZE] = {0};
+
+    /* Everything the core can refuse happens here, before the first AM write. */
+    res->failed = STEP_MEASURE;
+    show(progress, STEP_MEASURE, 0, 1);
+    int r = plan->state != PLAN_OK ? TP_E_ARG
+            : plan->first ? first_pieces(plan, theme, &cat, res, &tmd, &size, ticket)
+                          : delta_pieces(plan, theme, &cat, res, &tmd, &size);
     if (r) {
         res->detail = r;
         free(tmd);
@@ -131,6 +192,17 @@ int install_run(const install_plan *plan, const tp_theme *theme, const importer 
         store_mark_raise(store_dir, plan->index)) {
         free(tmd);
         return -1;
+    }
+
+    /* The first install's ticket, when the console has none for the title. A failure in it is cancelled too: whether
+     * AM kept something of it is not known. */
+    if (plan->first && plan->new_ticket) {
+        res->failed = STEP_TICKET;
+        show(progress, STEP_TICKET, 0, 1);
+        res->wrote = 1;
+        if (imp->ticket(imp->ctx, ticket, TP_TICKET_SIZE))
+            goto fail;
+        res->ticket = 1;
     }
 
     /* Phase 1: the new TMD and content 0. */
@@ -188,10 +260,19 @@ static int usable_at(const am_view *v, uint16_t index)
     return 0;
 }
 
+static int installed_at(const am_view *v, uint16_t index)
+{
+    for (size_t j = 0; j < v->count; j++)
+        if (v->list[j].index == index)
+            return v->installed[j];
+    return 0;
+}
+
 void install_judge(const am_view *before, const am_view *after, const install_plan *plan,
                    const install_result *res, judgement *j)
 {
     memset(j, 0, sizeof *j);
+    j->first = plan->first;
     j->seen = after->ok;
     j->pending = after->ok ? after->pending : PENDING_UNKNOWN;
     if (!res->done && !res->wrote) {
@@ -206,10 +287,15 @@ void install_judge(const am_view *before, const am_view *after, const install_pl
         if (before->list[k].index && before->usable[k] && !usable_at(after, before->list[k].index))
             j->lost++;
     j->new_installed = usable_at(after, plan->index);
+    j->not_owned = res->done && plan->first && !plan->new_ticket && !j->new_installed &&
+                   installed_at(after, plan->index);
     if (res->done)
         j->outcome = j->new_installed && !j->lost && after->pending == PENDING_NO ? OUT_DONE : OUT_DONE_UNCONFIRMED;
     else if (j->lost)
         j->outcome = OUT_LOST;
+    else if (plan->first)       /* what AM lists, not what the commit answered: AM may have committed phase 1 although
+                                   it reported an error (store.h), and then the pack is there */
+        j->outcome = after->exists ? OUT_PHASE2_FAILED_KEPT : OUT_CANCELLED_KEPT;
     else
         j->outcome = res->committed1 ? OUT_PHASE2_FAILED_KEPT : OUT_CANCELLED_KEPT;
 }

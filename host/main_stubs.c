@@ -398,14 +398,17 @@ int console_content_music(uint16_t index, uint32_t *error)
 }
 /* An importer whose every call succeeds unless the test says otherwise; when an install's second commit went
  * through, fake_installed (set by the test) gets the TMD it imported, to make AM's view and the catalogue what the
- * console would then report.
+ * console would then report. A ticket it takes (a first install) is on the console from then on (fake_am.ticket).
+ * fake_imp_lands: the failing call is a commit that AM carries out all the same, as store.h allows for: fake_landed
+ * (set by the test) gets the TMD of that import before the commit answers with its error.
  * 0.9.2: it writes down every call in its order with what it was given (fake_imp_trace, a line each; a content's
  * bytes as each write's length and the CRC-32 of the content so far), so a test can hold two installs against each
  * other. fake_imp_fail: the call with this number fails (1 is the first; cancel is not counted), 0: none.
  * fake_imp_guard, if set, is asked at every call whether it may be made now; fake_imp_unguarded counts the noes. */
 void (*fake_installed)(const uint8_t *tmd, size_t size);
+void (*fake_landed)(const uint8_t *tmd, size_t size);
 char fake_imp_trace[16384];
-int fake_imp_calls, fake_imp_fail, fake_imp_unguarded;
+int fake_imp_calls, fake_imp_fail, fake_imp_unguarded, fake_imp_lands;
 int (*fake_imp_guard)(void);
 static uint8_t fake_tmd[0x4000];
 static size_t fake_tmd_size;
@@ -475,8 +478,11 @@ static int imp_commit(void *ctx)
 {
     (void)ctx;
     imp_note("commit\n");
-    if (imp_called())
+    if (imp_called()) {
+        if (fake_imp_lands && fake_landed)
+            fake_landed(fake_tmd, fake_tmd_size);
         return -1;
+    }
     if (++fake_commits == 2 && fake_installed)
         fake_installed(fake_tmd, fake_tmd_size);
     return 0;
@@ -486,12 +492,21 @@ static void imp_cancel(void *ctx)
     (void)ctx;
     imp_note("cancel\n");
 }
+static int imp_ticket(void *ctx, const uint8_t *ticket, size_t size)
+{
+    (void)ctx;
+    imp_note("ticket %u %08lx\n", (unsigned)size, (unsigned long)crc32(0L, ticket, (uInt)size));
+    if (imp_called())
+        return -1;
+    fake_am.ticket = 1;
+    return 0;
+}
 
 void console_importer(importer *imp)
 {
     fake_commits = 0;
     *imp = (importer){NULL, imp_title_begin, imp_tmd, imp_contexts, imp_begin, imp_write, imp_finish, imp_commit,
-                      imp_cancel};
+                      imp_cancel, imp_ticket};
 }
 void console_read_home(home_state *h) { *h = fake_home; }
 

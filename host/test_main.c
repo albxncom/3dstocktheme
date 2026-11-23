@@ -31,7 +31,8 @@ extern int fake_deletes;
 extern char stub_foot[200];
 extern void (*fake_installed)(const uint8_t *tmd, size_t size);
 extern char fake_imp_trace[16384];
-extern int fake_imp_calls, fake_imp_fail, fake_imp_unguarded;
+extern int fake_imp_calls, fake_imp_fail, fake_imp_unguarded, fake_imp_lands;
+extern void (*fake_landed)(const uint8_t *tmd, size_t size);
 extern int (*fake_imp_guard)(void);
 extern int fake_music[PACK_CONTENTS];
 extern int fake_music_reads;
@@ -254,6 +255,9 @@ static void done_with_cleanup(const char *name)
     frames_for(500);
 }
 
+/* 89: the AM calls of 88's whole first install */
+static char fake_imp_trace0[sizeof fake_imp_trace];
+
 /* ---- a pack as the console would report it: themes 2 (ZIP_A's) and 3 (ZIP_B's) of 0004008C00009809, and `extra`
  *      more ("Theme 4" on, up to index 7), its record in sdmc:/theme-pack/installed.tmd under the working folder, its
  *      catalogue in the fake console */
@@ -280,8 +284,9 @@ static void make_archive(int top)
     fake_archive_size = 8 + 0xC8 * ((size_t)top + 1);
 }
 
-/* An install went through on the fake console: AM lists the new TMD's contents (installed, but a theme deleted
- * before stays deleted), content 0 lists the new theme, which in these cases is always ZIP_A's. */
+/* An install went through on the fake console: AM knows the title (also after a first install) and lists the new
+ * TMD's contents (installed, but a theme deleted before stays deleted), content 0 lists the new theme, which in these
+ * cases is always ZIP_A's (theme_a_name, theme_a_icon). */
 static void installed(const uint8_t *tmd, size_t size)
 {
     uint64_t title_id;
@@ -290,6 +295,7 @@ static void installed(const uint8_t *tmd, size_t size)
     am_view was = fake_am;
     if (tp_tmd_read(tmd, size, &title_id, &tmd_version, &count) != TP_OK)
         exit(3);
+    fake_am.exists = 1;
     fake_am.version = tmd_version;
     fake_am.count = count;
     int top = 0;
@@ -379,6 +385,25 @@ static void make_pack(const char *zip_a, const char *zip_b, int extra)
     fake_am.pending = PENDING_NO;
     memset(&fake_home, 0, sizeof fake_home);
     fake_home.ok = 1;               /* nothing of the pack in use or in the shuffle */
+}
+
+/* A console without the pack title (1.0.0-beta.2): AM answers, does not know 0004008C00009809, has no ticket for it
+ * and nothing pending; no catalogue; what is on the card stays as it is. An install there is a first install, whose
+ * theme is ZIP_A's (make_pack read it). */
+static void make_no_pack(void)
+{
+    memset(&fake_am, 0, sizeof fake_am);
+    fake_am.ok = 1;
+    fake_am.pending = PENDING_NO;
+    fake_archive = NULL;
+    fake_archive_size = 0;
+    snprintf(names[0], sizeof names[0], "Dummy");
+    for (int k = 1; k < FAKE_ICONS; k++)
+        snprintf(names[k], sizeof names[k], "(removed)");
+    memset(fake_icons, 0x11, sizeof fake_icons);
+    fake_installed = installed;
+    memset(&fake_home, 0, sizeof fake_home);
+    fake_home.ok = 1;
 }
 
 /* the folder view of sdmc:/Themes, opened from the Designs screen with keys, nothing selected */
@@ -1252,9 +1277,9 @@ static void fb_e_states(void)
     show_problem(T_SD_CARD, text_result(lang, TP_E_NOMEM), "", 0);
     fb_e_drawn("no memory for a folder", 0);
     int was = pv.state;
-    pv.state = PACK_NOT_INSTALLED;
+    pv.state = PACK_AM_ERROR;           /* since 1.0.0-beta.2 a console without the pack opens as an empty one */
     pack_ready();
-    fb_e_drawn("no theme pack (the head's warning, the box without it)", 0);
+    fb_e_drawn("the pack unread (the head's warning, the box without it)", 0);
     show_note(ART_INFO_WARN, "Refused", "Why.");
     fb_e_note("a refusal over a problem's head (none today: the rule all the same)", -1, 1);
     pv.state = was;
@@ -1284,6 +1309,16 @@ static void fb_e_states(void)
     show_note(-1, "Done", NULL);
     fb_e_note("a success", -1, 0);
     reset_app();
+}
+
+/* 89: a phase 1 commit AM carried out although it answered with an error: AM knows the title with the TMD's
+ * contents, content 0 installed, the theme not yet; content 0 lists the theme (installed's catalogue) */
+static void landed_phase1(const uint8_t *tmd, size_t size)
+{
+    installed(tmd, size);
+    for (size_t k = 0; k < fake_am.count; k++)
+        if (fake_am.list[k].index)
+            fake_am.usable[k] = 0;
 }
 
 int main(int argc, char **argv)
@@ -3094,8 +3129,8 @@ int main(int argc, char **argv)
     EXPECT(played(SFX_CONFIRM) == 1 && played(SFX_DONE) == 1 && played(SFX_ERROR) == 0,
            "the confirm sound at the push, the done sound at \"Installiert\"");
 
-    /* FIX-1 X3: the version carries the pre-release mark of app/identity.mk ("beta.1"): the settings' foot reads
-     *     "v1.0.0-beta.1"; the log's first line and the user agent take the same text_version (console.c); without a
+    /* FIX-1 X3: the version carries the pre-release mark of app/identity.mk ("beta.2"): the settings' foot reads
+     *     "v1.0.0-beta.2"; the log's first line and the user agent take the same text_version (console.c); without a
      *     mark the numbers stand alone */
     printf("-- the version's pre-release mark\n");
     {
@@ -3111,8 +3146,8 @@ int main(int argc, char **argv)
         snprintf(want, sizeof want, "v%d.%d.%d", APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_VERSION_MICRO);
         int foot_plain = !strcmp(version, want);
         version_set(APP_VERSION_PRE);
-        snprintf(want, sizeof want, "v%d.%d.%d-beta.1", APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_VERSION_MICRO);
-        EXPECT(foot_plain && !strcmp(APP_VERSION_PRE, "beta.1") && !strcmp(version, want) &&
+        snprintf(want, sizeof want, "v%d.%d.%d-beta.2", APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_VERSION_MICRO);
+        EXPECT(foot_plain && !strcmp(APP_VERSION_PRE, "beta.2") && !strcmp(version, want) &&
                sizeof version > strlen("v99.99.99-beta.12 probe"), "the foot: \"%s\" in this build (identity.mk's "
                "mark), the numbers alone without it; the buffer holds a probe build's longest form", version);
         text_version(v, sizeof v, APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_VERSION_MICRO, APP_VERSION_PRE);
@@ -4885,6 +4920,166 @@ int main(int argc, char **argv)
         sim_keys = 0; frame();
         EXPECT(st_ring && st_left, "ST-B3 let go and pressed again they count: A shows the ring (%d), START leaves (%d)",
                st_ring, st_left);
+    }
+
+    /* 88. 1.0.0-beta.2, the first install: a console without the pack title (no ticket for it, nothing pending), an
+     *     earlier pack's record still on the card, no mark. The Themes part opens as with an empty pack: the status
+     *     line counts 0, the installed designs show their empty state, the folder view lists the themes; the check
+     *     screen's footer says the install creates the pack; the install from the folder view runs to "Installiert",
+     *     the ticket first. AM's view then has the title with content 0 and the theme usable, installed.tmd matches
+     *     it, the installed designs list the theme; a second install runs as a delta (no ticket, version 1). */
+    printf("-- 88. the first install creates the pack\n");
+    {
+        if (system("rm -rf sdmc:/Themes sdmc:/theme-pack/installed.mark sdmc:/theme-pack/installed.mark.new"))
+            return 3;
+        make_pack(argv[1], argv[2], 0);     /* its record stays on the card; then the pack is gone from the console */
+        make_no_pack();
+        mkdir("sdmc:/Themes", 0755);
+        copy_to(argv[1], "sdmc:/Themes/a.zip");
+        copy_to(argv[2], "sdmc:/Themes/b.zip");
+        fake_imp_fail = 0;
+        fake_imp_guard = NULL;
+        close_theme();
+        open_installed_view();
+        char none_line[160], status[160];
+        text_installed(lang, 0, none_line, sizeof none_line);
+        int house = status_line(status, sizeof status);
+        EXPECT(pv.state == PACK_NOT_INSTALLED && house == ART_HOME_FOOT && !strcmp(status, none_line) &&
+               screen == SCR_INSTALLED && designs.count == 0 && !strcmp(stub_foot, none_line),
+               "no pack: the installed designs open empty, the status line counts 0 (\"%s\", state %d, screen %d)",
+               stub_foot, pv.state, screen);
+        open_folder_view();
+        EXPECT(screen == SCR_LIST && list.count == 2 && !strcmp(stub_foot, none_line),
+               "the folder view opens with both themes (%u rows), the footer \"%s\"", (unsigned)list.count, stub_foot);
+        EXPECT(select_row("a.zip"), "a.zip selected");
+        frames_for(300);
+        key(KEY_A); frames_for(500);
+        EXPECT(screen == SCR_CONFIRM && can_install() && plan.first && plan.new_ticket && plan.index == 1,
+               "its check screen offers the first install as theme 1, with a ticket (plan %d, index %u)", plan.state,
+               plan.index);
+        draw();
+        EXPECT(!strcmp(stub_foot, text(lang, T_CREATES_PACK)), "the check screen's footer: \"%s\"", stub_foot);
+        fake_imp_trace[0] = 0;
+        fake_imp_calls = 0;
+        key(KEY_A); frames_for(200); key(KEY_A); frames_for(3000);
+        EXPECT(screen == SCR_DONE && install_j.outcome == OUT_DONE && install_res.ticket && may_clean,
+               "\"Installiert\" with the cleanup question (screen %d, outcome %d)", screen, install_j.outcome);
+        snprintf(fake_imp_trace0, sizeof fake_imp_trace0, "%s", fake_imp_trace);
+        const char *second = strstr(fake_imp_trace, "commit\n");
+        EXPECT(!strncmp(fake_imp_trace, "ticket 848 ", 11) && strstr(fake_imp_trace, "\ntitle_begin\ntmd ") &&
+               second && strstr(second + 7, "commit\n") && !strstr(fake_imp_trace, "cancel") &&
+               !strstr(strchr(fake_imp_trace, '\n') + 1, "ticket"),
+               "the ticket once, then the two commits, no cancel:\n%s", fake_imp_trace);
+        EXPECT(fake_am.exists && fake_am.ticket && fake_am.version == 0 && fake_am.count == 2 &&
+               fake_am.list[0].index == 0 && fake_am.list[0].id == 0 && fake_am.usable[0] &&
+               fake_am.list[1].index == 1 && fake_am.list[1].id == 1 && fake_am.usable[1],
+               "AM's view: the title at version 0, content 0 (ID 0) and theme 1 (ID 1) installed and owned");
+        static store_record first_rec[2];
+        store_read(CARD_DIR, first_rec);
+        tp_difference d;
+        EXPECT(first_rec[0].present && !first_rec[1].present && store_mark(CARD_DIR) == 1 &&
+               tp_tmd_check(first_rec[0].tmd, first_rec[0].size, fake_am.version, fake_am.list, fake_am.count, &d) ==
+               TP_OK, "installed.tmd matches AM's view, nothing staged, the mark at 1");
+        EXPECT(pv.state == PACK_OK && pv.count == 1 && pv.usable == 1 && !pv.from_staged,
+               "the pack read anew: one theme, from installed.tmd (state %d)", pv.state);
+        key(KEY_A); frames_for(200); key(KEY_A); frames_for(800);       /* "Behalten" */
+        open_installed_view();
+        EXPECT(screen == SCR_INSTALLED && designs.count == 1 && designs.rows[0].index == 1,
+               "the installed designs list it (%u rows)", (unsigned)designs.count);
+        /* the second theme, ZIP_B's: a delta on what the first install made */
+        static tp_theme b;
+        peek(argv[2], &b);
+        snprintf(theme_a_name, sizeof theme_a_name, "%s", b.name);
+        memcpy(theme_a_icon, b.icon, TP_ICON_SIZE);
+        open_folder_view();
+        EXPECT(row("a.zip") && row("a.zip")->in_pack == 1 && row("a.zip")->in_pack_usable && select_row("b.zip"),
+               "a.zip shows installed as theme 1, b.zip selected");
+        frames_for(300);
+        key(KEY_A); frames_for(500);
+        EXPECT(screen == SCR_CONFIRM && can_install() && !plan.first && plan.index == 2 && plan.delta.version == 1,
+               "b.zip's check screen: a delta as theme 2, version 1 (plan %d, first %d)", plan.state, plan.first);
+        fake_imp_trace[0] = 0;
+        fake_imp_calls = 0;
+        key(KEY_A); frames_for(200); key(KEY_A); frames_for(3000);
+        EXPECT(screen == SCR_DONE && install_j.outcome == OUT_DONE && !install_res.ticket &&
+               !strncmp(fake_imp_trace, "title_begin\ntmd ", 16) && !strstr(fake_imp_trace, "ticket"),
+               "the second install: \"Installiert\", the delta's calls without a ticket (outcome %d)", install_j.outcome);
+        EXPECT(fake_am.version == 1 && fake_am.count == 3 && pv.state == PACK_OK && pv.usable == 2,
+               "AM's view at version 1 with both themes, the pack read anew (state %d, %u installed)", pv.state,
+               (unsigned)pv.usable);
+        key(KEY_A); frames_for(200); key(KEY_A); frames_for(800);
+        close_theme();
+        reset_app();
+    }
+
+    /* 89. the review's finding on 88: phase 1's commit answers with an error that AM carried out all the same. The
+     *     words go by what AM lists afterwards: the pack is there, the theme not, install it again (in both
+     *     languages); the pack read anew takes installed.tmd.new, which matches AM; installing again adds the theme
+     *     under the next number as a delta. And the reverse, the commit failing and AM without the title: not
+     *     created, and the console still without the pack. */
+    printf("-- 89. a first install whose first commit fails, carried out by AM or not\n");
+    for (int lands = 1; lands >= 0; lands--) {
+        if (system("rm -rf sdmc:/theme-pack/installed.mark sdmc:/theme-pack/installed.mark.new "
+                   "sdmc:/theme-pack/installed.tmd.new"))
+            return 3;
+        make_pack(argv[1], argv[2], 0);     /* an earlier pack's installed.tmd on the card, as in 88 */
+        make_no_pack();
+        close_theme();
+        int commit1 = 0;                    /* the call number of phase 1's commit, from 88's whole install */
+        for (const char *p = fake_imp_trace0; *p; p = strchr(p, '\n') + 1) {
+            commit1++;
+            if (!strncmp(p, "commit\n", 7))
+                break;
+        }
+        open_folder_view();
+        int ready = select_row("a.zip");
+        frames_for(300);
+        key(KEY_A); frames_for(500);
+        ready &= screen == SCR_CONFIRM && can_install() && plan.first;
+        fake_imp_trace[0] = 0;
+        fake_imp_calls = 0;
+        fake_imp_fail = commit1;
+        fake_imp_lands = lands;
+        fake_landed = landed_phase1;
+        key(KEY_A); frames_for(200); key(KEY_A); frames_for(3000);
+        fake_imp_fail = fake_imp_lands = 0;
+        fake_landed = NULL;
+        char de_title[160], de_body[1600];
+        text_outcome(LANG_DE, &install_j, &install_res, done_name, de_title, sizeof de_title, de_body, sizeof de_body);
+        if (lands) {
+            EXPECT(ready && screen == SCR_PROBLEM && install_j.outcome == OUT_PHASE2_FAILED_KEPT &&
+                   install_res.failed == STEP_COMMIT1 && !install_res.committed1 && !strcmp(title, "Not installed") &&
+                   strstr(body, "AM lists the theme pack as created") && strstr(body, "Install it again here") &&
+                   !strstr(body, "not created") && strstr(de_body, "Laut AM ist das Design-Paket angelegt") &&
+                   strstr(de_body, "Installiere es hier erneut") && !strstr(de_body, "nicht angelegt"),
+                   "commit %d failed, AM carried it out: the pack is there, the theme not (outcome %d): \"%s\" | "
+                   "\"%s\"", commit1, install_j.outcome, body, de_body);
+            EXPECT(fake_am.exists && pv.state == PACK_OK && pv.from_staged && pv.count == 1 && pv.usable == 0,
+                   "the pack read anew: installed.tmd.new matches AM, one theme record not installed (state %d)",
+                   pv.state);
+            key(KEY_A); frames_for(600);                /* OK on the problem screen */
+            open_folder_view();
+            EXPECT(select_row("a.zip"), "a.zip again");
+            frames_for(300);
+            key(KEY_A); frames_for(500);
+            EXPECT(screen == SCR_CONFIRM && can_install() && !plan.first && plan.index == 2,
+                   "its check screen: a delta as theme 2 (first %d, index %u)", plan.first, plan.index);
+            fake_imp_trace[0] = 0;
+            key(KEY_A); frames_for(200); key(KEY_A); frames_for(3000);
+            EXPECT(screen == SCR_DONE && install_j.outcome == OUT_DONE && fake_am.version == 1 && pv.state == PACK_OK &&
+                   !pv.from_staged && pv.usable == 1, "installed again: \"Installiert\", AM at version 1, the pack "
+                   "from installed.tmd (state %d, %u installed)", pv.state, (unsigned)pv.usable);
+            key(KEY_A); frames_for(200); key(KEY_A); frames_for(800);
+        } else {
+            EXPECT(ready && screen == SCR_PROBLEM && install_j.outcome == OUT_CANCELLED_KEPT &&
+                   strstr(body, "The theme pack was not created") && !strstr(body, "as created") &&
+                   strstr(de_body, "Das Design-Paket wurde nicht angelegt") && !fake_am.exists &&
+                   pv.state == PACK_NOT_INSTALLED, "commit %d failed, AM without the title: not created (outcome %d, "
+                   "state %d): \"%s\" | \"%s\"", commit1, install_j.outcome, pv.state, body, de_body);
+            key(KEY_A); frames_for(600);
+        }
+        close_theme();
+        reset_app();
     }
 
     fb_e_states();

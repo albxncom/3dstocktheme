@@ -1246,6 +1246,92 @@ class App(unittest.TestCase):
             theme_zip(path, "Fixture Violet", "for the mark test", False, 0, icon=(0x80, 0x20, 0xA0))
         return path
 
+    def test_first_install_is_tpack_pack_and_takes_a_delta(self):
+        # 1.0.0-beta.2: on a console without the pack title (an earlier pack's record on the card, which does not
+        # count) the application's plan and sequence on files give tpack pack's TMD, content 0 and theme content for
+        # the same theme and index byte for byte, and its ticket when the console has none (one found is kept); a
+        # second theme then installs as a delta on that result and passes verify-delta against tpack's CIA.
+        for mark, ticket in ((0, False), (4, True)):
+            with self.subTest(mark=mark, ticket=ticket):
+                index = mark + 1
+                store = Path(tempfile.mkdtemp(dir=self.tmp, prefix="first-store-"))
+                shutil.copy(self.v1_tmd, store / "installed.tmd")
+                if mark:
+                    (store / "installed.mark").write_text(f"{mark}\n")
+                first = Path(tempfile.mkdtemp(dir=self.tmp, prefix="first-out-"))
+                r = json.loads(run([BUILD / "test_app", "install", "--no-title", *(["--ticket"] if ticket else []),
+                                    "--store", store, "--zip", self.green, "--out", first]).stdout)
+                self.assertEqual((r["first"], r["index"], r["top"], r["version"], r["done"], r["outcome"],
+                                  r["ticket"], r["cancels"]), (1, index, index, 0, 1, 0, int(not ticket), 0))
+                self.assertEqual(sorted(p.name for p in first.iterdir()),
+                                 sorted(["0.app", f"{index}.app", "tmd.bin"] + ([] if ticket else ["ticket.bin"])))
+                self.assertEqual((store / "installed.tmd").read_bytes(), (first / "tmd.bin").read_bytes())
+                self.assertFalse((store / "installed.tmd.new").exists())
+                self.assertEqual((store / "installed.mark").read_text(), f"{index}\n")
+
+                d = data_dir(self.tmp, f"first-{index}", [self.green])
+                c_pack(d, self.base_cia, new=[self.green.name], next_index=index)
+                cia = d / "out" / "theme-pack.cia"
+                parts = cia_parts(cia)
+                self.assertEqual(sorted(parts["contents"]), [0, index])
+                self.assertEqual((first / "tmd.bin").read_bytes(), parts["tmd"])
+                self.assertEqual((first / "0.app").read_bytes(), parts["contents"][0])
+                self.assertEqual((first / f"{index}.app").read_bytes(), parts["contents"][index])
+                if not ticket:
+                    self.assertEqual((first / "ticket.bin").read_bytes(), parts["ticket"])
+
+                # the second theme: the record is the first install's, AM's view made from it
+                python_tool("installed", "--data", d, cia)
+                romfs = self.tmp / f"first-{index}-content0"
+                run([BIN / "ctrtool", f"--romfsdir={romfs}", first / "0.app"])
+                delta = d / "out" / "delta"
+                delta.mkdir()
+                r = json.loads(run([BUILD / "test_app", "install", "--store", store, "--archive",
+                                    romfs / "ContentInfoArchive_EUR_en.bin", "--icons", romfs / "icons", "--zip",
+                                    self.long, "--out", delta]).stdout)
+                self.assertEqual((r["first"], r["index"], r["version"], r["done"], r["outcome"], r["ticket"]),
+                                 (0, index + 1, 1, 1, 0, 0))
+                self.assertEqual(sorted(p.name for p in delta.iterdir()),
+                                 ["0.app", f"{index + 1}.app", "delta.json", "tmd.bin"])
+                m = manifest(d)
+                theme = theme_pack.read_theme(self.long)
+                m["themes"].append({"index": index + 1, "zip": self.long.name, "name": theme["name"],
+                                    "description": theme["description"], "added": "2026-11-23"})
+                m["next_index"] = index + 2
+                (d / "manifest.json").write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                shutil.copy(self.long, d / "themes")
+                out = python_tool("verify-delta", "--data", d, "--base-cia", cia).stdout
+                self.assertIn(f"import [0, {index + 1}]", out)
+                self.assertEqual((store / "installed.tmd").read_bytes(), (delta / "tmd.bin").read_bytes())
+
+    def test_a_failed_first_install_is_cancelled_and_leaves_no_title(self):
+        # Every importer call failing in turn on a console without the title, the ticket's first: one cancel, the
+        # record as for a delta (before the first commit the earlier pack's installed.tmd and the new TMD staged,
+        # after it the new TMD), the outcome cancelled or, after the first commit, the pack created without its theme
+        def first_install(*extra, expect=0):
+            store = Path(tempfile.mkdtemp(dir=self.tmp, prefix="first-fail-"))
+            shutil.copy(self.v1_tmd, store / "installed.tmd")
+            out = Path(tempfile.mkdtemp(dir=self.tmp, prefix="first-fail-out-"))
+            r = run([BUILD / "test_app", "install", "--no-title", "--store", store, "--zip", self.long, "--out", out,
+                     *extra], expect)
+            return json.loads(r.stdout), store, out
+
+        calls = first_install()[0]["calls"]
+        for n in range(calls):
+            r, store, out = first_install("--fail", str(n), expect=None)
+            with self.subTest(fail=n):
+                self.assertEqual((r["first"], r["done"], r["cancels"], r["wrote"]), (1, 0, 1, 1))
+                staged = store / "installed.tmd.new"
+                if r["committed1"]:
+                    self.assertEqual((store / "installed.tmd").read_bytes(), (out / "tmd.bin").read_bytes())
+                    self.assertFalse(staged.exists())
+                    self.assertEqual(r["outcome"], 4)                 # phase 2 failed, the pack created
+                else:
+                    self.assertEqual((store / "installed.tmd").read_bytes(), self.v1_tmd.read_bytes())
+                    self.assertTrue(staged.exists())
+                    self.assertEqual(r["outcome"], 3)                 # cancelled, the ticket's failure too
+        self.assertGreater(calls, 10)
+
     def test_the_record_must_match_am(self):
         shutil.copy(self.v0_tmd, self.store / "installed.tmd")
         r = self.install(self.long, "--am-tmd", self.v1_tmd, expect=1)

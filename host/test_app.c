@@ -6,6 +6,7 @@
  *       zip list; every message in both languages. Works in a temporary folder.
  *   test_app install --store DIR --archive FILE --icons DIR --zip FILE --out DIR [--fail N] [--not-usable I]...
  *                    [--am-tmd FILE] [--music off]
+ *   test_app install --no-title [--ticket] --store DIR --zip FILE --out DIR [--fail N] [--music off]
  *       the application's install path on files: the record in DIR (installed.tmd, installed.tmd.new), the
  *       installed catalogue (ContentInfoArchive_EUR_en.bin and icons/ of the installed content 0), AM's view made
  *       from the record, or from --am-tmd (what AM would report: every content installed and owned, except
@@ -13,7 +14,9 @@
  *       OUT/tmd.bin, OUT/0.app, OUT/<index>.app and OUT/delta.json (what theme_pack.py verify-delta reads), and
  *       fails its call number N with --fail; --music off installs it as "Ohne Musik installieren" does
  *       (tp_theme_drop_bgm). FILE is a theme zip or a theme installer CIA. Prints one JSON line. Exit 0 installed, 1 refused or failed before
- *       any AM write, 2 failed after one.
+ *       any AM write, 2 failed after one. --no-title: AM does not know the pack title (the first install, no
+ *       catalogue to read; the record files in DIR do not count), with --ticket the console has a ticket for it;
+ *       the importer also writes OUT/ticket.bin, and no delta.json.
  *   test_app texts
  *       every message in both languages, for reading.
  */
@@ -382,13 +385,15 @@ static void test_names(void)
 
 /* ---------------------------------------------------------------- an importer that records and fails on cue */
 
-enum { C_TITLE, C_TMD, C_CONTEXTS, C_BEGIN, C_WRITE, C_FINISH, C_COMMIT };
+enum { C_TITLE, C_TMD, C_CONTEXTS, C_BEGIN, C_WRITE, C_FINISH, C_COMMIT, C_TICKET };
 
 typedef struct fake {
     int calls, fail_at, cancels, commits;
     int kinds[256];
     uint8_t tmd[STORE_MAX];
     size_t tmd_size;
+    uint8_t ticket[TP_TICKET_SIZE];
+    size_t ticket_size;
     uint16_t contexts[8];
     size_t context_count;
     int open;                   /* a content is open */
@@ -499,13 +504,28 @@ static void fake_cancel(void *ctx)
     k->open = 0;
 }
 
+static int fake_ticket(void *ctx, const uint8_t *ticket, size_t size)
+{
+    fake *k = ctx;
+    if (fake_call(k, C_TICKET) || size > sizeof k->ticket)
+        return -1;
+    memcpy(k->ticket, ticket, size);
+    k->ticket_size = size;
+    if (k->dir) {
+        char path[1024];
+        snprintf(path, sizeof path, "%s/ticket.bin", k->dir);
+        return files_write(path, ticket, size) ? -1 : 0;
+    }
+    return 0;
+}
+
 static importer fake_importer(fake *k, int fail_at, const char *dir)
 {
     memset(k, 0, sizeof *k);
     k->fail_at = fail_at;
     k->dir = dir;
     return (importer){k, fake_title, fake_tmd, fake_contexts, fake_begin, fake_write, fake_finish, fake_commit,
-                      fake_cancel};
+                      fake_cancel, fake_ticket};
 }
 
 /* ---------------------------------------------------------------- plans and the install sequence */
@@ -734,6 +754,319 @@ static void test_plan_and_install(const char *zip_bgm, const char *zip_plain)
     files_close_source(&src);
     pack_free(&pv2);
     pack_free(&pv);
+}
+
+/* ---------------------------------------------------------------- the first install (1.0.0-beta.2) */
+
+/* AM's view of a console without the pack title: it answered, nothing pending, a ticket for the title or not */
+static void no_title(am_view *v, int ticket)
+{
+    memset(v, 0, sizeof *v);
+    v->ok = 1;
+    v->pending = PENDING_NO;
+    v->ticket = ticket;
+}
+
+/* An earlier pack's record left on the card (fx2's TMD as installed.tmd, a damaged installed.tmd.new), no mark */
+static void old_records(void)
+{
+    static const uint16_t idx[] = {1, 2};
+    fixture_make(&fx2, idx, 2, 2, 3);
+    reset_store(fx2.tmd, fx2.tmd_size);
+    char path[1024];
+    snprintf(path, sizeof path, "%s/" STORE_STAGED, tmp_dir);
+    if (files_write(path, fx2.tmd, fx2.tmd_size - 1))
+        exit(3);
+}
+
+static int kind_count(const fake *k, int kind)
+{
+    int n = 0;
+    for (int i = 0; i < k->calls && i < 256; i++)
+        n += k->kinds[i] == kind;
+    return n;
+}
+
+static void test_first_install(const char *zip_plain)
+{
+    pack_view pv = {0}, pv2 = {0};
+    am_view none, after;
+    tp_source src;
+    tp_theme theme;
+    CHECK_EQ(files_open_source(zip_plain, &src, NULL, NULL), FILES_OK);
+    CHECK_EQ(tp_theme_open(&theme, &src, "plain"), TP_OK);
+    char title[256], body[1024], line[64], path[1024], staged[1024];
+    snprintf(path, sizeof path, "%s/" STORE_FILE, tmp_dir);
+    snprintf(staged, sizeof staged, "%s/" STORE_STAGED, tmp_dir);
+
+    /* AM does not know the title: no theme, no TMD; an earlier pack's record files (and their damage) do not count,
+     * the catalogue is not read, the mark is the top; a pending import or AM unread refuse as for a pack */
+    old_records();
+    store_read(tmp_dir, rec);
+    no_title(&none, 0);
+    fixture_make(&fx, NULL, 0, 0, 0);
+    fx.fail_archive = 1;
+    catalogue_reader cat = {&fx, fx_archive, fx_icon};
+    CHECK_EQ(pack_assess(&pv, &none, rec, 0, &cat), PACK_NOT_INSTALLED);
+    CHECK(pack_takes(&pv) && !pv.tmd && !pv.themes && pv.count == 0 && pv.usable == 0 && pv.top == 0 && !pv.ticket);
+    text_pack(LANG_EN, &pv, title, sizeof title, body, sizeof body);
+    text_installed(LANG_EN, 0, line, sizeof line);
+    CHECK(!strcmp(body, line) && !strcmp(title, text(LANG_EN, T_INSTALL_THEME)));    /* the status line counts 0 */
+    none.pending = PENDING_YES;
+    CHECK_EQ(pack_assess(&pv, &none, rec, 0, &cat), PACK_PENDING);
+    CHECK(!pack_takes(&pv));
+    none.pending = PENDING_UNKNOWN;
+    CHECK_EQ(pack_assess(&pv, &none, rec, 0, &cat), PACK_PENDING_UNKNOWN);
+    none.pending = PENDING_NO;
+    none.ok = 0;
+    CHECK_EQ(pack_assess(&pv, &none, rec, 0, &cat), PACK_AM_ERROR);
+    none.ok = 1;
+    none.ticket = 1;
+    CHECK_EQ(pack_assess(&pv, &none, rec, 4, &cat), PACK_NOT_INSTALLED);
+    CHECK(pv.ticket && pv.top == 4 && pv.mark == 4);
+
+    /* the installed designs: an empty list; a delete is refused before AM and the TMD (there is none) */
+    static design_list d;
+    uint8_t music[PACK_CONTENTS] = {0};
+    CHECK(designs_readable(&pv));
+    designs_list(&d, &pv, music);
+    CHECK_EQ(d.count, 0);
+    CHECK_EQ(designs_room(&pv), TP_THEMES_MAX);
+    home_state home;
+    memset(&home, 0, sizeof home);
+    home.ok = 1;
+    deletion_plan dp;
+    CHECK_EQ(deletion_plan_make(&dp, &pv, &none, &home, TP_TITLE_ID, 1), DEL_PACK);
+
+    /* the plan: the index after the card's mark, the catalogue of the one theme up to it, the ticket only when the
+     * console has none */
+    install_plan plan, kept;
+    CHECK_EQ(plan_install(&kept, &pv, &theme), PLAN_OK);
+    CHECK(kept.first && !kept.new_ticket && kept.index == 5 && kept.top == 5 && kept.count == 1);
+    CHECK_EQ(kept.delta.version, 0);
+    pv.top = TP_INDEX_MAX;                              /* the mark at 349: no index left */
+    CHECK_EQ(plan_install(&plan, &pv, &theme), PLAN_FULL_INDEX);
+    none.ticket = 0;
+    CHECK_EQ(pack_assess(&pv, &none, rec, 0, &cat), PACK_NOT_INSTALLED);
+    CHECK_EQ(plan_install(&plan, &pv, &theme), PLAN_OK);
+    CHECK(plan.first && plan.new_ticket && plan.index == 1 && plan.top == 1 && plan.count == 1);
+    CHECK(plan.entries[0].index == 1 && !strcmp(plan.entries[0].name, theme.name));
+    kept = plan;
+    kept.new_ticket = 0;                                /* the same, with a ticket on the console */
+
+    /* the whole sequence: the ticket, then the two commits of a delta on the title that is not there yet */
+    old_records();
+    fake k;
+    importer imp = fake_importer(&k, -1, NULL);
+    install_result res;
+    CHECK_EQ(install_run(&plan, &theme, &imp, tmp_dir, NULL, &res), 0);
+    CHECK(res.done && res.wrote && res.ticket && res.tmd_accepted && res.committed1 && res.record_ok);
+    CHECK_EQ(res.failed, STEP_NONE);
+    CHECK_EQ(k.commits, 2);
+    CHECK_EQ(k.cancels, 0);
+    CHECK_EQ(kind_count(&k, C_TICKET), 1);
+    CHECK_EQ(k.ticket_size, TP_TICKET_SIZE);
+    static const int head[] = {C_TICKET, C_TITLE, C_TMD, C_BEGIN};
+    for (int i = 0; i < 4; i++)
+        CHECK_EQ(k.kinds[i], head[i]);
+    int total = k.calls, first_commit = -1;
+    for (int i = 0; i < total; i++)
+        if (k.kinds[i] == C_COMMIT && first_commit < 0)
+            first_commit = i;
+    CHECK_EQ(k.kinds[first_commit - 1], C_FINISH);
+    CHECK_EQ(k.kinds[first_commit + 1], C_TITLE);
+    CHECK_EQ(k.kinds[first_commit + 2], C_CONTEXTS);
+    CHECK_EQ(k.kinds[first_commit + 3], C_BEGIN);
+    CHECK_EQ(k.kinds[total - 2], C_FINISH);
+    CHECK_EQ(k.kinds[total - 1], C_COMMIT);
+    CHECK_EQ(k.context_count, 1);
+    CHECK_EQ(k.contexts[0], 1);
+    CHECK_EQ(k.done_count, 2);
+    CHECK(k.done[0].index == 0 && k.done[0].size == res.content0.size &&
+          !memcmp(k.done[0].sha256, res.content0.sha256, 32));
+    CHECK(k.done[1].index == 1 && k.done[1].size == res.theme.size && !memcmp(k.done[1].sha256, res.theme.sha256, 32));
+    /* the TMD: a whole pack of the one theme at version 0, content 0 with ID 0, the theme with ID = index */
+    uint64_t title_id = 0;
+    uint16_t version = 1;
+    size_t count = 0;
+    tp_content c0, c1;
+    CHECK_EQ(tp_tmd_read(k.tmd, k.tmd_size, &title_id, &version, &count), TP_OK);
+    CHECK(title_id == TP_TITLE_ID && version == 0 && count == 2 && k.tmd_size == tp_tmd_size(2));
+    CHECK_EQ(tp_tmd_record(k.tmd, k.tmd_size, 0, &c0), TP_OK);
+    CHECK_EQ(tp_tmd_record(k.tmd, k.tmd_size, 1, &c1), TP_OK);
+    CHECK(c0.id == 0 && c0.index == 0 && c0.type == 0 && !memcmp(c0.sha256, res.content0.sha256, 32));
+    CHECK(c1.id == 1 && c1.index == 1 && c1.type == 0x4000 && !memcmp(c1.sha256, res.theme.sha256, 32));
+    /* the record: the earlier pack's files overwritten, installed.tmd the new TMD, nothing staged, the mark at 1 */
+    CHECK(same_file(path, k.tmd, k.tmd_size) && !exists(staged));
+    CHECK_EQ(store_mark(tmp_dir), 1);
+    static uint8_t new_tmd[STORE_MAX], new_ticket[TP_TICKET_SIZE];
+    size_t new_size = k.tmd_size;
+    memcpy(new_tmd, k.tmd, new_size);
+    memcpy(new_ticket, k.ticket, TP_TICKET_SIZE);
+
+    /* the judgement on a console that had no pack: done, nothing to lose; installed but not owned is the ticket's
+     * doing only when the ticket was one found on the console, and then the way out is named */
+    judgement j;
+    view_of_tmd(&after, new_tmd, new_size);
+    after.installed[0] = after.installed[1] = 1;
+    install_judge(&none, &after, &plan, &res, &j);
+    CHECK_EQ(j.outcome, OUT_DONE);
+    CHECK(j.first && j.seen && j.new_installed && !j.lost && !j.not_owned);
+    CHECK(install_may_clean(&j, &res));
+    after.usable[1] = 0;                                /* the theme installed, not owned */
+    install_judge(&none, &after, &plan, &res, &j);
+    CHECK(j.outcome == OUT_DONE_UNCONFIRMED && !j.not_owned);
+    install_judge(&none, &after, &kept, &res, &j);
+    CHECK(j.outcome == OUT_DONE_UNCONFIRMED && j.not_owned && !install_may_clean(&j, &res));
+    text_outcome(LANG_EN, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+    CHECK(strstr(body, "does not cover it") && strstr(body, "FBI") && strstr(body, "0004008C00009809"));
+    text_outcome(LANG_DE, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+    CHECK(strstr(body, "deckt es nicht ab") && strstr(body, "FBI") && strstr(body, "0004008C00009809"));
+    after.installed[1] = 0;                             /* not installed at all: not the ticket */
+    install_judge(&none, &after, &kept, &res, &j);
+    CHECK(j.outcome == OUT_DONE_UNCONFIRMED && !j.not_owned);
+
+    /* the same theme at the same index gives the same TMD and ticket */
+    old_records();
+    imp = fake_importer(&k, -1, NULL);
+    CHECK_EQ(install_run(&plan, &theme, &imp, tmp_dir, NULL, &res), 0);
+    CHECK(k.tmd_size == new_size && !memcmp(k.tmd, new_tmd, new_size) && !memcmp(k.ticket, new_ticket, TP_TICKET_SIZE));
+
+    /* a ticket on the console: kept, no ticket call, the same TMD and contents */
+    old_records();
+    imp = fake_importer(&k, -1, NULL);
+    CHECK_EQ(install_run(&kept, &theme, &imp, tmp_dir, NULL, &res), 0);
+    CHECK(res.done && !res.ticket && k.ticket_size == 0 && kind_count(&k, C_TICKET) == 0);
+    CHECK_EQ(k.kinds[0], C_TITLE);
+    CHECK_EQ(k.calls, total - 1);
+    CHECK(k.tmd_size == new_size && !memcmp(k.tmd, new_tmd, new_size));
+    CHECK(same_file(path, new_tmd, new_size) && !exists(staged));
+
+    /* every call failing in turn, with the ticket and without: a cancel, no call after the failing one, the mark
+     * raised; the record as before the first commit (the earlier pack's installed.tmd, the new TMD staged) or after
+     * it (the new TMD, nothing staged); words that are true on a console that had no theme of the pack */
+    for (int with = 0; with < 2; with++) {
+        const install_plan *p = with ? &plan : &kept;
+        int calls = with ? total : total - 1, commit1 = with ? first_commit : first_commit - 1;
+        for (int n = 0; n < calls; n++) {
+            old_records();
+            imp = fake_importer(&k, n, NULL);
+            CHECK_EQ(install_run(p, &theme, &imp, tmp_dir, NULL, &res), -1);
+            CHECK(!res.done);
+            CHECK_EQ(k.cancels, 1);
+            CHECK_EQ(k.calls, n + 1);
+            CHECK_EQ(res.wrote, with || n > 0);
+            CHECK_EQ(res.ticket, with && n > 0);
+            CHECK_EQ(res.tmd_accepted, n > (with ? 2 : 1));
+            CHECK_EQ(res.committed1, n > commit1);
+            int kind = k.kinds[n], want;
+            if (kind == C_TICKET)
+                want = STEP_TICKET;
+            else if (n <= commit1)
+                want = kind == C_TITLE ? STEP_TITLE1 : kind == C_TMD ? STEP_TMD : kind == C_COMMIT ? STEP_COMMIT1
+                                                                               : STEP_CONTENT0;
+            else
+                want = kind == C_TITLE ? STEP_TITLE2 : kind == C_CONTEXTS ? STEP_CONTEXT : kind == C_COMMIT
+                                                                                        ? STEP_COMMIT2 : STEP_CONTENT;
+            CHECK_EQ(res.failed, want);
+            CHECK_EQ(store_mark(tmp_dir), 1);
+            if (res.committed1) {
+                CHECK(same_file(path, new_tmd, new_size) && !exists(staged));
+                view_of_tmd(&after, new_tmd, new_size);
+                after.usable[1] = 0;                    /* phase 1 committed, the theme not imported */
+            } else {
+                CHECK(same_file(path, fx2.tmd, fx2.tmd_size) && same_file(staged, new_tmd, new_size));
+                after = none;
+            }
+            install_judge(&none, &after, p, &res, &j);
+            CHECK_EQ(j.outcome, res.committed1 ? OUT_PHASE2_FAILED_KEPT : res.wrote ? OUT_CANCELLED_KEPT
+                                                                                    : OUT_NOTHING_WRITTEN);
+            text_outcome(LANG_EN, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+            CHECK(!strstr(body, "still installed") && !strstr(body, "pack CIA"));
+            CHECK(res.wrote ? !strstr(body, "Nothing on the console was changed")
+                            : strstr(body, "Nothing on the console was changed") != NULL);
+            text_outcome(LANG_DE, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+            CHECK(!strstr(body, "weiter installiert") && !strstr(body, "CIA des Pakets"));
+        }
+    }
+    /* AM's view unread afterwards: the words do not speak of themes installed before */
+    res.done = res.committed1 = 0;
+    res.wrote = 1;
+    res.failed = STEP_CONTENT0;
+    after.ok = 0;
+    install_judge(&none, &after, &plan, &res, &j);
+    CHECK_EQ(j.outcome, OUT_UNKNOWN);
+    text_outcome(LANG_EN, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+    CHECK(!strstr(body, "installed themes") && !strstr(body, "pack CIA"));
+
+    /* after phase 1 and a failed phase 2: an installed pack (version 0, the theme's record without its content), and
+     * the next install a delta under a new index, as on any pack */
+    old_records();
+    imp = fake_importer(&k, first_commit + 1, NULL);   /* phase 2's title begin */
+    CHECK_EQ(install_run(&plan, &theme, &imp, tmp_dir, NULL, &res), -1);
+    CHECK(res.committed1 && res.record_ok && !res.done);
+    view_of_tmd(&after, new_tmd, new_size);
+    after.usable[1] = 0;
+    store_read(tmp_dir, rec);
+    static const uint16_t one[] = {1};
+    fixture_make(&fx, one, 1, 1, 0);                    /* the catalogue content 0 holds: theme 1, up to 1 */
+    CHECK_EQ(pack_assess(&pv2, &after, rec, store_mark(tmp_dir), &cat), PACK_OK);
+    CHECK(pv2.count == 1 && pv2.usable == 0 && pv2.top == 1 && !pv2.from_staged);
+    CHECK_EQ(plan_install(&plan, &pv2, &theme), PLAN_OK);
+    CHECK(!plan.first && plan.index == 2 && plan.delta.version == 1 && plan.delta.content0_id == 0x10001);
+    imp = fake_importer(&k, -1, NULL);
+    CHECK_EQ(install_run(&plan, &theme, &imp, tmp_dir, NULL, &res), 0);
+    CHECK(res.done && kind_count(&k, C_TICKET) == 0 && k.kinds[0] == C_TITLE);
+    CHECK_EQ(tp_tmd_read(k.tmd, k.tmd_size, &title_id, &version, &count), TP_OK);
+    CHECK(version == 1 && count == 3);
+
+    /* phase 1's commit answers with an error that AM carried out all the same (store.h): the words go by what AM
+     * lists afterwards, not by the commit's answer. AM knows the title: the pack is there, the theme not (install it
+     * again), or the theme too; the staged TMD is the record that matches. AM does not know it: not created. */
+    CHECK_EQ(plan_install(&plan, &pv, &theme), PLAN_OK);
+    CHECK(plan.first && plan.new_ticket && plan.index == 1);
+    old_records();
+    imp = fake_importer(&k, first_commit, NULL);
+    CHECK_EQ(install_run(&plan, &theme, &imp, tmp_dir, NULL, &res), -1);
+    CHECK(!res.committed1 && res.wrote && res.failed == STEP_COMMIT1 && k.cancels == 1);
+    CHECK(same_file(path, fx2.tmd, fx2.tmd_size) && same_file(staged, new_tmd, new_size));
+    view_of_tmd(&after, new_tmd, new_size);
+    after.usable[1] = 0;                                /* the title with content 0, the theme not imported */
+    install_judge(&none, &after, &plan, &res, &j);
+    CHECK(j.outcome == OUT_PHASE2_FAILED_KEPT && j.first && !j.new_installed);
+    text_outcome(LANG_EN, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+    CHECK(!strcmp(title, "Not installed") && strstr(body, "AM lists the theme pack as created") &&
+          strstr(body, "Install it again here") && !strstr(body, "not created"));
+    text_outcome(LANG_DE, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+    CHECK(!strcmp(title, "Nicht installiert") && strstr(body, "Laut AM ist das Design-Paket angelegt") &&
+          strstr(body, "Installiere es hier erneut") && !strstr(body, "nicht angelegt"));
+    store_read(tmp_dir, rec);
+    fixture_make(&fx, one, 1, 1, 0);
+    pack_free(&pv2);
+    CHECK_EQ(pack_assess(&pv2, &after, rec, store_mark(tmp_dir), &cat), PACK_OK);
+    CHECK(pv2.from_staged && pv2.count == 1 && pv2.usable == 0);
+    after.usable[1] = 1;                                /* the theme listed as well */
+    install_judge(&none, &after, &plan, &res, &j);
+    CHECK(j.outcome == OUT_PHASE2_FAILED_KEPT && j.new_installed && !install_may_clean(&j, &res));
+    text_outcome(LANG_EN, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+    CHECK(!strcmp(title, "Installed, not confirmed") && strstr(body, "as installed") && !strstr(body, "not created"));
+    text_outcome(LANG_DE, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+    CHECK(!strcmp(title, "Installiert, nicht bestätigt") && strstr(body, "installiert. Wähle es") &&
+          !strstr(body, "nicht angelegt"));
+    install_judge(&none, &none, &plan, &res, &j);       /* the reverse: AM does not know the title afterwards */
+    CHECK_EQ(j.outcome, OUT_CANCELLED_KEPT);
+    text_outcome(LANG_EN, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+    CHECK(strstr(body, "The theme pack was not created") && !strstr(body, "as created"));
+    text_outcome(LANG_DE, &j, &res, theme.name, title, sizeof title, body, sizeof body);
+    CHECK(strstr(body, "Das Design-Paket wurde nicht angelegt") && !strstr(body, "ist das Design-Paket angelegt"));
+    res.committed1 = 1;                                 /* a commit AM reported and then lost: AM's list still decides */
+    install_judge(&none, &none, &plan, &res, &j);
+    CHECK_EQ(j.outcome, OUT_CANCELLED_KEPT);
+
+    tp_theme_close(&theme);
+    files_close_source(&src);
+    pack_free(&pv);
+    pack_free(&pv2);
 }
 
 /* ---------------------------------------------------------------- the mark, and the reviewer's two cases */
@@ -2230,7 +2563,7 @@ static void each_text(void (*fn)(int lang, const char *what, const char *title, 
         }
         for (int o = OUT_DONE; o <= OUT_UNKNOWN; o++) {
             for (int variant = 0; variant < 4; variant++) {
-                judgement j = {o, 1, 0, 1, PENDING_NO};
+                judgement j = {o, 1, 0, 1, PENDING_NO, 0, 0};
                 install_result res;
                 memset(&res, 0, sizeof res);
                 static const int steps[] = {STEP_CONTENT0, STEP_COMMIT1, STEP_CONTENT, STEP_TITLE2};
@@ -2253,6 +2586,22 @@ static void each_text(void (*fn)(int lang, const char *what, const char *title, 
                 fn(lang, what, title, body);
             }
         }
+        /* the first install, on a console that had no theme of the pack: the ticket, AM's view changed before the
+         * first write, a ticket found that does not cover the theme */
+        for (int o = OUT_DONE; o <= OUT_UNKNOWN; o++)
+            for (int variant = 0; variant < 4; variant++) {
+                judgement j = {o, variant != 1, 0, variant == 3, variant == 2 ? PENDING_YES : PENDING_NO, 1,
+                               o == OUT_DONE_UNCONFIRMED && variant == 0};
+                install_result res;
+                memset(&res, 0, sizeof res);
+                static const int steps[] = {STEP_TICKET, STEP_CONTENT0, STEP_COMMIT1, STEP_CONTENT};
+                static const int nothing[] = {STEP_MEASURE, STEP_STAGE, STEP_TITLE1, STEP_MEASURE};
+                res.failed = o == OUT_NOTHING_WRITTEN ? nothing[variant] : steps[variant];
+                res.detail = o == OUT_NOTHING_WRITTEN && variant == 0 ? TP_E_STALE : TP_E_LZ11;
+                text_outcome(lang, &j, &res, "T4 Name", title, sizeof title, body, sizeof body);
+                snprintf(what, sizeof what, "first outcome %d/%d", o, variant);
+                fn(lang, what, title, body);
+            }
     }
 }
 
@@ -2298,7 +2647,13 @@ static void hex(const uint8_t *p, size_t n, char *out)
 static int cmd_install(int argc, char **argv)
 {
     const char *store = NULL, *archive = NULL, *icons = NULL, *zip = NULL, *out = NULL, *am_tmd = NULL;
-    int fail_at = -1, not_usable[16], n_not = 0, music = 1;
+    int fail_at = -1, not_usable[16], n_not = 0, music = 1, no_title = 0, ticket = 0;
+    for (; argc && (!strcmp(argv[0], "--no-title") || !strcmp(argv[0], "--ticket")); argc--, argv++) {
+        if (!strcmp(argv[0], "--no-title"))    /* the options without a value come first */
+            no_title = 1;
+        else
+            ticket = 1;
+    }
     for (int i = 0; i + 1 < argc; i += 2) {
         if (!strcmp(argv[i], "--store")) store = argv[i + 1];
         else if (!strcmp(argv[i], "--archive")) archive = argv[i + 1];
@@ -2314,14 +2669,18 @@ static int cmd_install(int argc, char **argv)
             return 3;
         }
     }
-    if (!store || !archive || !icons || !zip || !out) {
-        fprintf(stderr, "install needs --store, --archive, --icons, --zip and --out\n");
+    if (!store || (!no_title && (!archive || !icons)) || !zip || !out) {
+        fprintf(stderr, "install needs --store, --archive, --icons (not with --no-title), --zip and --out\n");
         return 3;
     }
     static store_record recs[2];
     static am_view before, after;
     store_read(store, recs);
-    if (am_tmd) {
+    if (no_title) {
+        before.ok = 1;
+        before.pending = PENDING_NO;
+        before.ticket = ticket;
+    } else if (am_tmd) {
         size_t size;
         uint8_t *p = slurp(am_tmd, &size);
         view_of_tmd(&before, p, size);
@@ -2339,7 +2698,7 @@ static int cmd_install(int argc, char **argv)
     pack_view pv;
     int state = pack_assess(&pv, &before, recs, store_mark(store), &cat);
     char title[256], body[2048], body_de[2048];
-    if (state != PACK_OK) {
+    if (!pack_takes(&pv)) {
         text_pack(LANG_EN, &pv, title, sizeof title, body, sizeof body);
         printf("{\"pack\": %d, \"text\": \"%s\"}\n", state, body);
         pack_free(&pv);
@@ -2393,7 +2752,7 @@ static int cmd_install(int argc, char **argv)
     text_outcome(LANG_EN, &j, &res, theme.name, title, sizeof title, body, sizeof body);
     char title_de[256];
     text_outcome(LANG_DE, &j, &res, theme.name, title_de, sizeof title_de, body_de, sizeof body_de);
-    if (res.done) {
+    if (res.done && !plan.first) {
         char path[1024], digest[65], base_digest[65];
         uint8_t d[32];
         sha256(k.tmd, k.tmd_size, d);
@@ -2410,9 +2769,10 @@ static int cmd_install(int argc, char **argv)
     }
     printf("{\"pack\": 0, \"plan\": 0, \"index\": %u, \"top\": %u, \"version\": %u, \"from_staged\": %d, "
            "\"done\": %d, \"failed\": %d, \"wrote\": %d, \"committed1\": %d, \"record_ok\": %d, \"calls\": %d, "
-           "\"cancels\": %d, \"outcome\": %d, \"title\": \"%s\", \"title_de\": \"%s\"}\n",
+           "\"cancels\": %d, \"outcome\": %d, \"title\": \"%s\", \"title_de\": \"%s\", \"first\": %d, "
+           "\"ticket\": %d}\n",
            plan.index, plan.top, plan.delta.version, pv.from_staged, res.done, res.failed, res.wrote,
-           res.committed1, res.record_ok, k.calls, k.cancels, j.outcome, title, title_de);
+           res.committed1, res.record_ok, k.calls, k.cancels, j.outcome, title, title_de, plan.first, res.ticket);
     tp_theme_close(&theme);
     files_close_source(&src);
     pack_free(&pv);
@@ -2703,7 +3063,7 @@ static void test_motion(void)
 
 static void test_may_clean(void)
 {
-    judgement j = {OUT_DONE, 1, 0, 1, PENDING_NO};
+    judgement j = {OUT_DONE, 1, 0, 1, PENDING_NO, 0, 0};
     install_result res;
     memset(&res, 0, sizeof res);
     res.done = res.wrote = res.tmd_accepted = res.committed1 = res.record_ok = 1;
@@ -2784,6 +3144,7 @@ int main(int argc, char **argv)
     test_files_and_store();
     test_assess();
     test_plan_and_install(argv[2], argv[3]);
+    test_first_install(argv[3]);
     test_mark();
     test_reviewer_cases(argv[3]);
     test_judge();
