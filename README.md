@@ -3,7 +3,7 @@
 A Nintendo 3DS homebrew application that installs custom themes and badge sets into the HOME Menu's own systems. A theme you install shows up under "Change Theme" like an official one, with its name and icon, works with shuffle and with saved layouts, and can be deleted there again.
 
 > [!IMPORTANT]
-> **European consoles only, for now.** The application writes to the European theme title and has only run on a European New 3DS XL. On a console of another region it has not been tried and is not expected to work. Help to bring it to other regions is very welcome: see [Other regions](#other-regions).
+> **European consoles only, for now.** The application writes to the European theme title and has run on two European consoles, a New 3DS XL and a New 2DS XL. On a console of another region it has not been tried and is not expected to work. Help to bring it to other regions is very welcome: see [Other regions](#other-regions).
 
 | Themes | From the SD card | Install | Installing |
 | --- | --- | --- | --- |
@@ -22,11 +22,11 @@ The pictures are drawn by the project's own renderer with stand-in themes: a vio
 ## Before you start
 
 - **Homebrew access**: a 3DS with custom firmware and a title installer such as FBI.
-- **A European console**: the application works on the European theme title (`0004008C00009809`) and has only run on a European New 3DS XL. Other regions are untested and not expected to work.
+- **A European console**: the application works on the European theme title (`0004008C00009809`) and has run on two European consoles, a New 3DS XL and a New 2DS XL. Other regions are untested and not expected to work.
 - **Nothing else to install first**: the first theme you install creates the theme pack on title `0004008C00009809` and its record on the SD card; every later theme is added to it. A pack built on a computer with [`tools/theme-pack`](tools/theme-pack/README.md) still works, with its record copied to the card ([Seeding the record from the Mac](docs/README.md#seeding-the-record-from-the-mac)).
 - **Never remove the pack in System Settings, Data Management**: it lists all theme titles as one entry, so it would very likely remove the official themes too ([why](tools/theme-pack/README.md#install-console)). To remove the pack, delete the title and the ticket of `0004008C00009809` in FBI, after checking the ID digit by digit.
 - **For sound**: the DSP firmware dump on the card (`sdmc:/3ds/dspfirm.cdc`); without it the application runs silent. To make it with Luma3DS: in the HOME Menu, press L + D-Pad Down + Select to open the Rosalina menu, choose "Miscellaneous options", then "Dump DSP firmware". Rosalina writes the file to that place; start the application again afterwards.
-- **A backup**: the application writes to the theme title and to the HOME Menu's badge data. The first install, which creates the theme pack, is new in 1.0.0-beta.2 and has not run on a console yet. Back up your SD card and your badge data before you use it.
+- **A backup**: the application writes to the theme title and to the HOME Menu's badge data. The first install, which creates the theme pack, is new in 1.0.0-beta.2 and was seen on a console on 2026-11-23, a New 2DS XL that never had the pack. Back up your SD card and your badge data before you use it.
 
 ## Install
 
@@ -64,7 +64,7 @@ This writes `app/build/3DStockTheme.3dsx`. How the CIA is built is under [Build]
 - **The theme title**: `TP_TITLE_ID` in [`core/tp.h`](core/tp.h) is the European theme title (`0004008C00009809`), and [`tools/theme-pack`](tools/theme-pack/README.md) builds the pack for the same title.
 - **The catalogue**: the list of themes the HOME Menu reads is written with the region record and the languages of a European console (`MetaDataContentHeader.bin` in the pack tool's README).
 - **What was read in the HOME Menu's code** comes from the European HOME Menu of system version 11.17. Whether another region's behaves the same is not known.
-- **The Badges part** has only run on the same console. Whether it depends on the region is not known.
+- **The Badges part** has only run on European consoles. Whether it depends on the region is not known.
 
 The most useful first step is a test on a console of another region, with a backup first: the pack tool's README names the console tests that passed in Europe (T1 to T3).
 
