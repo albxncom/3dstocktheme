@@ -1,0 +1,2 @@
+# the root .gitignore leaves out every build/ folder; this one holds scripts, not built files
+!/build/

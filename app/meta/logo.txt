@@ -1,0 +1,13 @@
+The CIA's start logo: a finished, signed file. make cia passes it to makerom with -logo; app/meta/logo/test_logo.py checks it.
+
+file    app/meta/logo.bin
+size    8192
+sha256  eac1c2ca6fff4037b66262a924efa89718e36213d53b1b105f3054dfed4b7dcd
+
+What it is: an LZ11-compressed DARC (two layouts, six animations, one 4-bit alpha texture of the word 3DStockTheme in light grey on black, the variant "Wort 1") followed by the 32-byte HMAC-SHA256 the HOME Menu checks before it plays a logo, padded with zeros to 0x2000 bytes. It is byte for byte the ExeFS section "logo" of the test title L3 ("Logotest 3", 000400000fa5a800), whose start logo showed on a console (2026-11-17).
+
+Made by: logo/makelogo.py (its logo "word") with logo/logofmt.py and logo/lettering.py, then signed outside this repository. The signing step reads its key out of the HOME Menu's code; that key and the signing tool are not in this repository and nothing here signs. A build therefore needs no key, and a changed logo cannot be signed from this repository alone: a changed DARC no longer fits the MAC and the HOME Menu would refuse it at every start. So test_logo.py also requires the DARC inside logo.bin to equal makelogo.py's "word": a change to the logo's drawing fails make test until a new signed file replaces logo.bin and this text.
+
+What is inside: our own layouts, animations and texture; of the HOME Menu's only the names it looks for (blyt/NintendoLogo_U_00.bclyt and _D_00, anim/NintendoLogo_{U,D}_00_SceneOut{A,B,C}.bclan, the groups G_A_00, G_B_00, G_C_00). logo/checklogo.py reads a logo back and refuses a spoiled one; it cannot check the MAC (that needs the key).
+
+Licences: logo/logofmt.py follows and logo/checklogo.py adapts parts of themeplaza-app (KennLDN/themeplaza-app, commit 6183c8c0, MIT), each with the notice in the file. The lettering is the project's own (the stroke table of logo/lettering.py, first drawn for the flat banner of what is now app/meta/icon.py, which C170 replaced).

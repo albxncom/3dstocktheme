@@ -1,0 +1,11 @@
+The CIA's banner: its 3D model is a finished file. make -C app banner packs it with the chime (bannertool makebanner -ci); app/meta/test_banner.py checks it, make cia checks it inside the CIA.
+
+file    app/meta/banner.cgfx
+size    122264
+sha256  efb49476344294a614cc44f467748c749b5ea6cfe51b7be22149daa60fd71287
+
+What it is: a CGFX model (the model COMMON, an unlit material with its textures, a looped animation of 240 frames) that shows the project's own logo as the Stock start screen draws it (the house and the word of ui/look_stock.py) on the polygons of the banner scene. It is byte for byte the model of the test title 13 ("Bannertest 13", 000400000fa5b000), whose banner showed on a console without a fault (C170).
+
+Made by: the banner pipeline in tools/banner/ at the repository's top level (its README): the scene as rigid parts, a GLB of it, pycgfx (MIT, commit 6c2e0cd) in a container, then the pipeline's own fixes and checks; python3 -I tools/banner/build.py PYCGFX OUT_DIR makes this file again byte for byte. pycgfx was run unchanged; none of its code is in this repository and a build of the application does not need it. test_banner.py refuses any change to this file that this text does not state.
+
+What is inside: our own meshes, textures and animation, with the names of the format as pycgfx and the pipeline write them; nothing of Nintendo's.
